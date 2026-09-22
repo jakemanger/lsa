@@ -32,7 +32,7 @@ case ${1:-list} in
   list)
     say "ls, but for your agent sessions"
     run "lsa"
-    say "See sessions from every agent and project, starting with the newest."
+    say "See sessions from every agent and project, starting with the most recent."
     run "lsa -a" 3
     say "pick one up where you left it"
     printf '%b' "$PS"; type_out "lsa resume 3"; sleep 0.6; printf '\n'
