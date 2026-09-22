@@ -35,5 +35,5 @@ jobs:
         with:
           files: |
             dist/als_*_all.deb
-            dist/als_all.deb
+            dist/als.deb
             als

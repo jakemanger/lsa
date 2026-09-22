@@ -103,12 +103,15 @@ EOF
     insert into transcript_events values ('iiii9999-0000-0000-0000-000000000000', 2, '{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Nothing today.\"}]}}', 2);"
 fi
 
+# fixtures are old: the working marker is only for files touched in the last two minutes
+find "$tmp" -type f -exec touch -t 202601010000 {} +
+
 fail=0
 check() { # name expected actual
   if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1"; echo "  want: $2"; echo "  got:  $3"; fail=1; fi
 }
-title_of() { cut -c54-; }          # the title column in -a listings
-title_here() { cut -c33-; }        # the title column in a directory listing
+title_of() { cut -c55-; }          # the title column in -a listings
+title_here() { cut -c34-; }        # the title column in a directory listing
 agents_of() { awk '{print $2}' | sort | tr '\n' ' ' | sed 's/ $//'; }
 
 out=$(cd "$proj" && bash "$ALS")
@@ -160,6 +163,13 @@ check "path by prefix" "$tmp/.pi/agent/sessions/x/2026-09-22T09-00-00-000Z_cccc3
 touch -t 203001010000 "$tmp/.pi/agent/sessions/x/2026-09-22T09-00-00-000Z_cccc3333-0000-0000-0000-000000000000.jsonl"
 check "index 0 is the newest" "$tmp/.pi/agent/sessions/x/2026-09-22T09-00-00-000Z_cccc3333-0000-0000-0000-000000000000.jsonl" "$(bash "$ALS" path 0)"
 check "listing indexes are contiguous" "$(seq 0 $(( $(printf '%s\n' "$all" | grep -c .) - 1 )) | tr '\n' ' ' | sed 's/ $//')" "$(bash "$ALS" -a | awk '{print $1}' | tr '\n' ' ' | sed 's/ $//')"
+( exec -a codex sleep 30 ) & fake=$!   # a process named codex, so the codex session counts as working
+touch "$tmp/.codex/sessions/2026/09/22/rollout-2026-09-22T10-00-00-bbbb2222-0000-0000-0000-000000000000.jsonl"
+check "a fresh session with a live agent is working" "● working" "$(bash "$ALS" -a -t codex | awk '{print $3, $4}')"
+check "a fresh session without a live agent is not" "0s ago" "$(touch "$tmp/.qwen/projects/x/chats/eeee5555-0000-0000-0000-000000000000.jsonl"; bash "$ALS" -a -t qwen | awk '{print $3, $4}')"
+kill $fake 2>/dev/null; wait $fake 2>/dev/null || true
+check "gone once the agent exits" "ago" "$(bash "$ALS" -a -t codex | awk '{print $4}')"
+touch -t 202601010000 "$tmp/.codex/sessions/2026/09/22/rollout-2026-09-22T10-00-00-bbbb2222-0000-0000-0000-000000000000.jsonl" "$tmp/.qwen/projects/x/chats/eeee5555-0000-0000-0000-000000000000.jsonl"
 check "index out of range fails" "1" "$(bash "$ALS" path 99 >/dev/null 2>&1; echo $?)"
 check "unknown prefix fails" "1" "$(bash "$ALS" path zzzz >/dev/null 2>&1; echo $?)"
 check "empty dir hint" "als: no sessions in $tmp (try als -a)" "$(cd "$tmp" && bash "$ALS" 2>&1)"

@@ -19,8 +19,8 @@ brew install jakemanger/tap/als
 Debian / Ubuntu (a `.deb` is attached to every release):
 
 ```
-curl -LO https://github.com/jakemanger/als/releases/latest/download/als_all.deb
-sudo apt install ./als_all.deb
+curl -LO https://github.com/jakemanger/als/releases/latest/download/als.deb
+sudo apt install ./als.deb
 ```
 
 Anywhere else: it is one bash script.
@@ -83,6 +83,11 @@ als resume 0        the same by index, like tmux attach -t 0
 ```
 
 ![als picking a session](demo/pick.gif)
+
+A session whose transcript changed in the last two minutes, and whose agent
+has a live process, shows `● working` instead of its age. That is the
+whole detection: an agent writes to its transcript while it works and stops
+when it is waiting on you, so an open but idle session is not marked.
 
 A session is named by its index or its id. Index 0 is the newest session
 on the machine and the numbers are global, so `als resume 3` is the same

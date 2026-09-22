@@ -69,8 +69,8 @@ openclaw() { # id key age prompt
     insert into transcript_events values ('$1', 1, '{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"$4\"}}', 1);"
 }
 goose_real() { # cwd age prompt -> a real session, so the demo can resume it
-  ( cd "$1" && HOME=$H GOOSE_PROVIDER=ollama GOOSE_MODEL=${DEMO_MODEL:-qwen2.5:1.5b} GOOSE_TELEMETRY_ENABLED=false \
-      goose run -t "$3" >/dev/null 2>&1 ) || { echo "demo: goose run failed (is ollama running with ${DEMO_MODEL:-qwen2.5:1.5b}?)" >&2; return 1; }
+  ( cd "$1" && HOME=$H GOOSE_PROVIDER=ollama GOOSE_MODEL=${DEMO_MODEL:-qwen2.5:3b} GOOSE_TELEMETRY_ENABLED=false \
+      goose run -t "$3" >/dev/null 2>&1 ) || { echo "demo: goose run failed (is ollama running with ${DEMO_MODEL:-qwen2.5:3b}?)" >&2; return 1; }
   sqlite3 "$H/.local/share/goose/sessions/sessions.db" "update sessions set updated_at = datetime('now', '-$2 seconds')"
 }
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Record the README gifs. Needs asciinema, agg and expect, plus goose and a
 # running ollama with the demo model for the resume at the end of the list
-# scene (brew install asciinema agg block-goose-cli ollama; ollama pull qwen2.5:1.5b).
+# scene (brew install asciinema agg block-goose-cli ollama; ollama pull qwen2.5:3b).
 #   demo/record.sh            -> demo/list.gif and demo/pick.gif
 #   demo/record.sh pick       -> just one scene
 set -eu
@@ -11,6 +11,10 @@ DEMO_HOME=/tmp/als-demo   # a short, clean path: it appears in the gifs
 rm -rf "$DEMO_HOME"; trap 'rm -rf "$DEMO_HOME"' EXIT
 bash demo/fixtures.sh "$DEMO_HOME" > /dev/null
 HOME=$DEMO_HOME XDG_CACHE_HOME=$DEMO_HOME/.cache ./als -a > /dev/null   # warm the cache so the demo is as fast as real life
+# the newest session is "working": touch its transcript and keep a process called claude alive
+touch "$DEMO_HOME"/.claude/projects/*/3e1f9c2a-*.jsonl
+( exec -a claude sleep 900 ) & fake=$!
+trap 'kill $fake 2>/dev/null; wait $fake 2>/dev/null; rm -rf "$DEMO_HOME"' EXIT
 
 scenes=("$@"); [ ${#scenes[@]} -gt 0 ] || scenes=(list pick)
 for scene in "${scenes[@]}"; do

@@ -59,8 +59,8 @@ color_of() { # agent -> sets COLOR
   esac
   [ "$USE_COLOR" = 1 ] || COLOR=''
 }
-if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then USE_COLOR=1 C_DIM=$'\033[2m' C_RESET=$'\033[0m'
-else USE_COLOR=0 C_DIM='' C_RESET=''; fi
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then USE_COLOR=1 C_DIM=$'\033[2m' C_WORK=$'\033[32m' C_RESET=$'\033[0m'
+else USE_COLOR=0 C_DIM='' C_WORK='' C_RESET=''; fi
 
 resume_cmd() { # agent id file cwd -> sets RESUME ("" when the agent has no resume command)
   case $1 in
@@ -253,10 +253,28 @@ want_agent() { # agent
   return 1
 }
 
+# ---------- which agents have a live process right now ----------
+# A transcript is written to while its agent works, so a session touched in
+# the last two minutes whose agent is running is shown as working. One ps
+# call, only made when some session is that fresh.
+WORKING_WINDOW=120
+running_agents() {
+  ps -axo command= 2>/dev/null | awk '
+    { cmd = $1; sub(/.*\//, "", cmd)
+      if (cmd ~ /^(claude|codex|pi|gemini|qwen|opencode|goose|openclaw)$/) seen[cmd] = 1
+      else if (cmd ~ /^muse(-bin.*)?$/) seen["muse"] = 1
+      else if (cmd ~ /^\.?cline$/) seen["cline"] = 1
+      else if (cmd ~ /^(node|bun|deno)[0-9.]*$/ && $2 ~ /\/(pi|gemini|qwen|openclaw|opencode|cline)$/) { sub(/.*\//, "", $2); seen[$2] = 1 } }
+    END { for (a in seen) printf "%s ", a }'
+}
+
 # ---------- list ----------
 list_rows() { # dir cols
-  local dir=$1 cols=$2 shown=0 i=-1 width ts agent f cwd id short n title when proj
-  sessions | while IFS=$'\t' read -r ts agent f id n cwd title; do
+  local dir=$1 cols=$2 shown=0 i=-1 width ts agent f cwd id short n title when proj rows running=''
+  rows=$(sessions)
+  [ -n "$rows" ] || return 0
+  [ $(( NOW - ${rows%%	*} )) -lt "$WORKING_WINDOW" ] && running=$(running_agents)
+  printf '%s\n' "$rows" | while IFS=$'\t' read -r ts agent f id n cwd title; do
     i=$((i+1))
     want_agent "$agent" || continue
     [ "$cwd" = - ] && cwd=''; [ "$title" = - ] && title=''
@@ -265,14 +283,18 @@ list_rows() { # dir cols
     [ -z "$title" ] && title="${C_DIM}(empty)${C_RESET}"
     color_of "$agent"
     ago "$ts"; when=$AGO
+    case " $running " in *" $agent "*)
+      [ $(( NOW - ts )) -lt "$WORKING_WINDOW" ] && when="${C_WORK}● working${C_RESET}";;
+    esac
     proj=${cwd##*/}; [ -n "$proj" ] || proj='?'
-    width=$(( cols - 4 - 9 - 9 - 22 - 10 - 4 ))
+    width=$(( cols - 4 - 9 - 10 - 22 - 10 - 4 ))
     [ "$width" -lt 20 ] && width=20
+    case $when in *working*) ;; *) when=$(printf '%-9s' "$when");; esac   # "● working" is already 9 columns wide
     if [ "$ALL" = 1 ]; then
-      printf '%3d %s%-8s%s %-8s %-20.20s %s%-9s%s %.*s\n' \
+      printf '%3d %s%-8s%s %s %-20.20s %s%-9s%s %.*s\n' \
         "$i" "$COLOR" "$agent" "$C_RESET" "$when" "$proj" "$C_DIM" "$short" "$C_RESET" "$width" "$title"
     else
-      printf '%3d %s%-8s%s %-8s %s%-9s%s %.*s\n' \
+      printf '%3d %s%-8s%s %s %s%-9s%s %.*s\n' \
         "$i" "$COLOR" "$agent" "$C_RESET" "$when" "$C_DIM" "$short" "$C_RESET" "$((width+21))" "$title"
     fi
     if [ "$LONG" = 1 ]; then

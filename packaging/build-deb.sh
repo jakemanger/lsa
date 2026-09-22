@@ -22,5 +22,5 @@ Description: ls for agent sessions
  Lists, prints and resumes Claude Code, Codex and pi transcripts.
 EOF
 dpkg-deb --build --root-owner-group "$root" "dist/als_${VERSION}_all.deb"
-cp "dist/als_${VERSION}_all.deb" dist/als_all.deb
+cp "dist/als_${VERSION}_all.deb" dist/als.deb
 echo "built dist/als_${VERSION}_all.deb"

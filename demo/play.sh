@@ -6,7 +6,7 @@ export PATH="$(dirname "$ALS"):$PATH"
 export HOME=${DEMO_HOME:?}
 export XDG_CACHE_HOME="$HOME/.cache"
 export COLUMNS=${DEMO_COLS:-100}   # the recorder is headless, so tput cannot know the window size
-export GOOSE_PROVIDER=ollama GOOSE_MODEL=${DEMO_MODEL:-qwen2.5:1.5b} GOOSE_TELEMETRY_ENABLED=false
+export GOOSE_PROVIDER=ollama GOOSE_MODEL=${DEMO_MODEL:-qwen2.5:3b} GOOSE_TELEMETRY_ENABLED=false
 cd "$HOME/code/wren"
 
 PS="\033[1;32m❯\033[0m "
@@ -34,16 +34,16 @@ case ${1:-list} in
     printf "$PS"; type_out "als resume 3"; sleep 0.6; printf '\n'
     # drive the resumed Goose session: one follow-up, then leave
     expect -c '
-      set timeout 90
-      spawn als resume 3
-      expect -re "goose is ready|resuming"
+      set timeout 120
+      spawn -noecho als resume 3
+      expect -re {Enter to send}
       sleep 1.5
       send "thanks, now make them shorter\r"
-      expect -re "\\( O\\)>|goose>|\\n\\(.*\\)\\s*$" { }
-      expect -timeout 60 -re "\\n.*\\n.*\\n"
+      expect -re {[0-9]+\.[0-9]+s}          ;# goose prints the elapsed time when a reply is complete
+      expect -timeout 20 -re {Enter to send}
       sleep 4
       send "/exit\r"
-      expect eof'
+      expect -timeout 20 eof'
     sleep 1.5
     ;;
   pick)
