@@ -24,7 +24,9 @@ options:
   -h, --help          this text
   -V, --version       version
 
-<id> is the short id from the listing, or any unique prefix of the full one.
+<id> is the index or the short id from the listing, or any unique prefix
+of the full id. Index 0 is the newest session; indexes are global, so
+als resume 3 is the same session whether you listed with -a or not.
 EOF
 }
 
@@ -130,8 +132,9 @@ resume_cmd() { # agent id file
 
 # ---------- list ----------
 list_rows() { # dir cols
-  local dir=$1 cols=$2 shown=0 width ts agent f cwd id short n title color when proj
+  local dir=$1 cols=$2 shown=0 i=-1 width ts agent f cwd id short n title color when proj
   find_all | sort -rn | while IFS=$'\t' read -r ts agent f id n; do
+    i=$((i+1))
     want_agent "$agent" || continue
     { read -r cwd; read -r title; } < <("read_$agent" "$f")
     short=${id:0:$n}
@@ -140,20 +143,20 @@ list_rows() { # dir cols
     case $agent in claude) color=$C_CLAUDE;; codex) color=$C_CODEX;; *) color=$C_PI;; esac
     when=$(ago "$ts")
     proj=$(basename "${cwd:-?}")
-    width=$(( cols - 8 - 9 - 22 - 10 - 4 ))
+    width=$(( cols - 4 - 8 - 9 - 22 - 10 - 4 ))
     [ "$width" -lt 20 ] && width=20
     if [ "$ALL" = 1 ]; then
-      printf '%s%-7s%s %-8s %-20.20s %s%-9s%s %.*s\n' \
-        "$color" "$agent" "$C_RESET" "$when" "$proj" "$C_DIM" "$short" "$C_RESET" "$width" "$title"
+      printf '%3d %s%-7s%s %-8s %-20.20s %s%-9s%s %.*s\n' \
+        "$i" "$color" "$agent" "$C_RESET" "$when" "$proj" "$C_DIM" "$short" "$C_RESET" "$width" "$title"
     else
-      printf '%s%-7s%s %-8s %s%-9s%s %.*s\n' \
-        "$color" "$agent" "$C_RESET" "$when" "$C_DIM" "$short" "$C_RESET" "$((width+21))" "$title"
+      printf '%3d %s%-7s%s %-8s %s%-9s%s %.*s\n' \
+        "$i" "$color" "$agent" "$C_RESET" "$when" "$C_DIM" "$short" "$C_RESET" "$((width+21))" "$title"
     fi
     if [ "$LONG" = 1 ]; then
-      printf '        %s$ %s%s\n' "$C_DIM" "$(resume_cmd "$agent" "$id" "$f")" "$C_RESET"
+      printf '            %s$ %s%s\n' "$C_DIM" "$(resume_cmd "$agent" "$id" "$f")" "$C_RESET"
     fi
     if [ "$PATHS" = 1 ]; then
-      printf '        %s%s%s\n' "$C_DIM" "$f" "$C_RESET"
+      printf '            %s%s%s\n' "$C_DIM" "$f" "$C_RESET"
     fi
     shown=$((shown+1))
     [ "$LIMIT" -gt 0 ] && [ "$shown" -ge "$LIMIT" ] && break
@@ -180,8 +183,15 @@ matching_ids() { # prefix
   return 0
 }
 
-find_one() { # prefix
-  local prefix=$1 hits n
+find_one() { # index-or-prefix
+  local prefix=$1 hits n ts agent f id
+  case $prefix in
+    [0-9]|[0-9][0-9]|[0-9][0-9][0-9])   # an index: nth row of the newest-first list
+      hits=$(find_all | sort -rn | sed -n "$((prefix+1))p")
+      [ -n "$hits" ] || { echo "als: no session at index $prefix" >&2; return 1; }
+      IFS=$'\t' read -r ts agent f id n <<< "$hits"
+      printf '%s\t%s\t%s\n' "$agent" "$id" "$f"; return 0;;
+  esac
   hits=$(matching_ids "$prefix")
   n=$(printf '%s' "$hits" | grep -c .)
   case $n in
