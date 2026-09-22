@@ -1,0 +1,61 @@
+name: Prepare draft release
+
+# Manual only. Publishing the draft and updating package repositories are
+# separate, reviewed actions; neither is performed by this workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag (must match VERSION in lsa)
+        required: true
+        default: v0.1.0
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck jq sqlite3
+        if: runner.os == 'Linux'
+      - run: brew install shellcheck jq sqlite
+        if: runner.os == 'macOS'
+      - name: Verify tag and source version
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: test "$RELEASE_TAG" = "v$(./lsa --version | cut -d' ' -f2)"
+      - run: shellcheck -s bash lsa test.sh packaging/*.sh
+      - run: make test
+
+  package:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - run: sudo apt-get update && sudo apt-get install -y libarchive-tools jq sqlite3
+      - run: bash packaging/install-nfpm.sh
+      - run: NFPM="$PWD/.tools/nfpm" make packages check-packages
+      - run: make smoke-linux
+      - name: Upload draft release for review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_NOTES: '`ls` for agent sessions.'
+        run: |
+          gh release create "$RELEASE_TAG" --verify-tag --draft \
+            --title "lsa ${RELEASE_TAG#v}" --notes "$RELEASE_NOTES" \
+            dist/lsa dist/lsa.deb dist/lsa.rpm dist/lsa.pkg.tar.zst \
+            dist/lsa.rb dist/SHA256SUMS

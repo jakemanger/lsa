@@ -1,2 +1,4 @@
 dist/
 demo/*.cast
+.tools/
+.DS_Store

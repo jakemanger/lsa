@@ -3,7 +3,7 @@
 # Nothing here is real work: the prompts, projects and ids are made up so
 # the gifs on the README show no one's actual sessions. The one exception
 # is a Goose session, run for real against a local ollama model, so the
-# demo can end with an honest `als resume`.
+# demo can end with an honest `lsa resume`.
 #
 #   demo/fixtures.sh <dir>     -> populates <dir> as $HOME
 set -eu

@@ -1,0 +1,46 @@
+name: lsa
+arch: all
+platform: linux
+version: ${LSA_VERSION}
+release: 1
+section: utils
+priority: optional
+maintainer: Jake Manger <52495554+jakemanger@users.noreply.github.com>
+description: ls for agent sessions
+homepage: https://github.com/jakemanger/lsa
+license: MIT
+
+contents:
+  - src: ./lsa
+    dst: /usr/bin/lsa
+    file_info:
+      mode: 0755
+  - src: ./README.md
+    dst: /usr/share/doc/lsa/README.md
+    file_info:
+      mode: 0644
+  - src: ./LICENSE
+    dst: /usr/share/licenses/lsa/LICENSE
+    file_info:
+      mode: 0644
+  - src: ./LICENSE
+    dst: /usr/share/doc/lsa/copyright
+    packager: deb
+    file_info:
+      mode: 0644
+
+overrides:
+  deb:
+    depends: ["bash (>= 3.2)", coreutils, findutils, grep, sed, mawk, procps, jq, sqlite3]
+  rpm:
+    depends: ["bash >= 3.2", coreutils, findutils, grep, sed, gawk, procps-ng, jq, sqlite]
+  archlinux:
+    depends: [bash, coreutils, findutils, grep, sed, gawk, procps-ng, jq, sqlite]
+
+deb:
+  arch: all
+rpm:
+  arch: noarch
+archlinux:
+  arch: any
+  packager: Jake Manger <52495554+jakemanger@users.noreply.github.com>

@@ -1,37 +1,62 @@
-# als
+# lsa
 
 `ls` for agent sessions. One command lists every session from every coding
 agent on the machine, newest first, then prints or reopens any of them.
 
-![als listing sessions](demo/list.gif)
+![lsa listing sessions](demo/list.gif)
 
-Like `ls`, `als` on its own lists the sessions started in the current
+Like `ls`, `lsa` on its own lists the sessions started in the current
 directory. `-a` lists them all. Listing takes about as long as `ls -l`.
 
 ## Install
 
-Homebrew:
+One file, on macOS or Linux:
 
-```
-brew install jakemanger/tap/als
-```
-
-Debian / Ubuntu (a `.deb` is attached to every release):
-
-```
-curl -LO https://github.com/jakemanger/als/releases/latest/download/als.deb
-sudo apt install ./als.deb
+```sh
+curl -fLO https://github.com/jakemanger/lsa/releases/latest/download/lsa
+sudo mv lsa /usr/local/bin/lsa
+sudo chmod +x /usr/local/bin/lsa
 ```
 
-Anywhere else: it is one bash script.
+**Oh My Zsh?** Run `unalias lsa` once in your current terminal. Add
+`unalias lsa 2>/dev/null` to the end of `~/.zshrc` to keep it working in new
+terminals. Oh My Zsh otherwise uses `lsa` as a shortcut for `ls -lah`.
 
-```
-curl -fsSL https://raw.githubusercontent.com/jakemanger/als/main/als -o /usr/local/bin/als
-chmod +x /usr/local/bin/als
+Needs bash 3.2 or later, grep, sed, awk, find, stat and ps. `lsa show` also
+needs `jq`, and the database-backed agents need `sqlite3`.
+
+### Package managers
+
+Homebrew (macOS and Linux):
+
+```sh
+brew install jakemanger/tap/lsa
 ```
 
-Needs bash 3.2 or later, grep, sed, awk and stat. `als show` also needs `jq`,
-and the database-backed agents need `sqlite3`.
+Debian / Ubuntu:
+
+```sh
+curl -fLO https://github.com/jakemanger/lsa/releases/latest/download/lsa.deb
+sudo apt install ./lsa.deb
+```
+
+Fedora / RHEL:
+
+```sh
+curl -fLO https://github.com/jakemanger/lsa/releases/latest/download/lsa.rpm
+sudo dnf install ./lsa.rpm
+```
+
+Arch Linux:
+
+```sh
+curl -fLO https://github.com/jakemanger/lsa/releases/latest/download/lsa.pkg.tar.zst
+sudo pacman -U ./lsa.pkg.tar.zst
+```
+
+Linux packages are release downloads, with dependencies installed by your
+package manager. Updates use the same commands. No extra package repository
+is required. The Homebrew tap supports `brew upgrade lsa`.
 
 ## Agents
 
@@ -48,18 +73,18 @@ and the database-backed agents need `sqlite3`.
 | OpenClaw | 🦞 | ✓ | ✓ | ✓ | ✓ |
 | Gemini CLI | ✦ | ✓ | ✓ | ✓ | from source |
 
-Tested means I installed the agent, ran a session and checked that `als`
+Tested means I installed the agent, ran a session and checked that `lsa`
 listed it, printed it and reopened it. Gemini CLI needs a Google account
 I do not have, so its reader was written from the CLI's own source and
-the fixture matches what that code writes; if you use it, `als -a -t gemini`
+the fixture matches what that code writes; if you use it, `lsa -a -t gemini`
 and an issue with what you see, good or bad, gets it a tick. Want another
 agent? Open an issue with one session file.
 
 Resume runs the agent's own command (`claude --resume`, `codex resume`,
 `muse resume`, and so on) from the directory the session was started in,
-because most agents only find a session from there. `als -l` prints the
-same thing as a line you can paste, `cd` included when you are somewhere
-else. OpenClaw sessions
+because most agents only find a session from there. `lsa -l` adds the full
+working directory and transcript path as columns on the same row.
+OpenClaw sessions
 are chats rather than projects, so their directory column shows the session
 key instead.
 
@@ -71,20 +96,19 @@ the Cline CLI. Cursor is not read.
 ## Use
 
 ```
-als                 sessions started in this directory
-als -a              every session
-als ~/code/foo      sessions started in another directory
-als -t codex -n 5   the five newest Codex sessions
-als -l              show the command that resumes each session
-als -L              show each transcript's path
+lsa                 sessions started in this directory
+lsa -a              every session
+lsa ~/code/foo      sessions started in another directory
+lsa -t codex -n 5   the five newest Codex sessions
+lsa -l              add full directory and transcript path columns
 
-als show 659c       print a transcript as plain text
-als path 659c       print where the transcript lives
-als resume 659c     reopen it in its own agent
-als resume 0        the same by index, like tmux attach -t 0
+lsa show 659c       print a transcript as plain text
+lsa path 659c       print where the transcript lives
+lsa resume 659c     reopen it in its own agent
+lsa resume 0        the same by index, like tmux attach -t 0
 ```
 
-![als picking a session](demo/pick.gif)
+![lsa picking a session](demo/pick.gif)
 
 A session whose transcript changed in the last two minutes, and whose agent
 has a live process, shows a green `●` and how long the current turn has been
@@ -100,15 +124,30 @@ works and stops when it is waiting on you, so an open but idle session is
 not marked. With colour off the marker is `▶`.
 
 A session is named by its index or its id. Index 0 is the newest session
-on the machine and the numbers are global, so `als resume 3` is the same
+on the machine and the numbers are global, so `lsa resume 3` is the same
 session whether you listed with `-a` or not. Ids are the shortest prefix
 that is unique on your machine, the way git shortens hashes; any longer
 prefix of the full id works too. `show` works well with a pager or grep:
 
 ```
-als show 659c | less
-als show 659c | grep -n 'TODO'
+lsa show 659c | less
+lsa show 659c | grep -n 'TODO'
 ```
+
+Long format keeps one row per session: index, agent, age (or busy duration),
+full working directory, short id, transcript path, and first prompt. Paths
+are never truncated, so long rows may wrap in a narrow terminal. Cline and
+Muse point to their conversation files, rather than their metadata indexes.
+OpenCode, Goose and OpenClaw store conversations in a shared SQLite database;
+their paths are marked `[shared database]`. Deleting one of those databases
+would delete other sessions too. `lsa path <id>` prints just the path.
+
+Repeated prompts can be real, separate sessions. For example, Pi's Claude
+bridge keeps a Pi conversation plus Claude Code backing sessions. It can
+create a new Claude session and import the same history after an interrupted
+turn, an error, or resuming Pi. Those files have distinct ids even though
+their first prompt matches, so `lsa` lists them separately. Use `-t pi` to
+see only the Pi conversations, or `-l` to inspect each backing file.
 
 ## Where it looks
 
@@ -130,7 +169,7 @@ that ships with macOS and most Linux distributions; without it those
 agents are silently skipped.
 
 A session's directory and first prompt never change, so they are cached in
-`~/.cache/als/` after the first run. Listing is then one directory scan,
+`~/.cache/lsa/` after the first run. Listing is then one directory scan,
 one `stat` and one `awk`, about the cost of `ls -l` on the same files.
 Delete the cache directory if you ever want a rescan. Nothing else is
 written, nothing leaves the machine.
@@ -148,8 +187,10 @@ please say which version of the agent wrote your fixture.
 
 ```
 make test        run the fixture tests
-make lint        shellcheck
-make deb         build a .deb (needs dpkg-deb)
+make lint        ShellCheck, workflow lint and formula syntax
+make packages    build .deb, .rpm and Arch packages (needs nFPM)
+make check-packages  check the release files locally
+make formula     refresh the Homebrew formula's version and checksum
 make install     copy to /usr/local/bin
 demo/record.sh   re-record the gifs (asciinema + agg; invented sessions,
                  plus one real Goose session over ollama for the resume)

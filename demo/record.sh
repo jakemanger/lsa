@@ -7,10 +7,10 @@
 set -eu
 cd "$(dirname "$0")/.."
 export DEMO_HOME DEMO_COLS=100
-DEMO_HOME=/tmp/als-demo   # a short, clean path: it appears in the gifs
+DEMO_HOME=/tmp/lsa-demo   # a short, clean path: it appears in the gifs
 rm -rf "$DEMO_HOME"; trap 'rm -rf "$DEMO_HOME"' EXIT
 bash demo/fixtures.sh "$DEMO_HOME" > /dev/null
-HOME=$DEMO_HOME XDG_CACHE_HOME=$DEMO_HOME/.cache ./als -a > /dev/null   # warm the cache so the demo is as fast as real life
+HOME=$DEMO_HOME XDG_CACHE_HOME=$DEMO_HOME/.cache ./lsa -a > /dev/null   # warm the cache so the demo is as fast as real life
 # the newest session is "working": touch its transcript and keep a process called claude alive
 touch "$DEMO_HOME"/.claude/projects/*/3e1f9c2a-*.jsonl
 ( exec -a claude sleep 900 ) & fake=$!

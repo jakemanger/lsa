@@ -1,30 +1,39 @@
 PREFIX ?= /usr/local
-VERSION := $(shell sed -n 's/^VERSION="\(.*\)"/\1/p' als)
 
-.PHONY: test lint install uninstall deb formula clean
+.PHONY: test lint install uninstall packages check-packages smoke-linux deb rpm arch formula clean
 
 test:
 	bash test.sh
 
 lint:
-	shellcheck -s bash als test.sh packaging/build-deb.sh
+	shellcheck -s bash lsa test.sh packaging/*.sh
+	actionlint
+	ruby -c Formula/lsa.rb
 
 install:
-	install -d $(DESTDIR)$(PREFIX)/bin
-	install -m 0755 als $(DESTDIR)$(PREFIX)/bin/als
+	install -d "$(DESTDIR)$(PREFIX)/bin"
+	install -m 0755 lsa "$(DESTDIR)$(PREFIX)/bin/lsa"
 
 uninstall:
-	rm -f $(DESTDIR)$(PREFIX)/bin/als
+	rm -f "$(DESTDIR)$(PREFIX)/bin/lsa"
 
-deb:
-	bash packaging/build-deb.sh
+packages:
+	bash packaging/build.sh all
 
-# Fill the sha256 in Formula/als.rb from the tagged tarball on GitHub.
+deb rpm:
+	bash packaging/build.sh $@
+
+arch:
+	bash packaging/build.sh archlinux
+
+check-packages:
+	bash packaging/check.sh
+
+smoke-linux:
+	bash packaging/smoke-linux.sh
+
 formula:
-	@sha=$$(curl -fsSL https://github.com/jakemanger/als/archive/refs/tags/v$(VERSION).tar.gz | shasum -a 256 | cut -d' ' -f1); \
-	sed -i.bak -e 's|^  url .*|  url "https://github.com/jakemanger/als/archive/refs/tags/v$(VERSION).tar.gz"|' \
-	           -e "s|^  sha256 .*|  sha256 \"$$sha\"|" Formula/als.rb && rm Formula/als.rb.bak; \
-	echo "Formula/als.rb -> v$(VERSION) $$sha"
+	bash packaging/formula.sh > Formula/lsa.rb
 
 clean:
 	rm -rf dist

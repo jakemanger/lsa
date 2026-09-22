@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Types and runs a scripted demo inside the recorder. Usage: demo/play.sh <scene>
 set -u
-ALS=$(cd "$(dirname "$0")/.." && pwd)/als
-export PATH="$(dirname "$ALS"):$PATH"
+LSA=$(cd "$(dirname "$0")/.." && pwd)/lsa
+export PATH="$(dirname "$LSA"):$PATH"
 export HOME=${DEMO_HOME:?}
 export XDG_CACHE_HOME="$HOME/.cache"
 export COLUMNS=${DEMO_COLS:-100}   # the recorder is headless, so tput cannot know the window size
@@ -27,15 +27,15 @@ clear
 case ${1:-list} in
   list)
     say "ls, but for your agent sessions"
-    run "als"
+    run "lsa"
     say "every project, every agent, newest first"
-    run "als -a" 3
+    run "lsa -a" 3
     say "pick one up where you left it"
-    printf "$PS"; type_out "als resume 3"; sleep 0.6; printf '\n'
+    printf "$PS"; type_out "lsa resume 3"; sleep 0.6; printf '\n'
     # drive the resumed Goose session: one follow-up, then leave
     expect -c '
       set timeout 120
-      spawn -noecho als resume 3
+      spawn -noecho lsa resume 3
       expect -re {Enter to send}
       sleep 1.5
       send "thanks, now make them shorter\r"
@@ -48,11 +48,11 @@ case ${1:-list} in
     ;;
   pick)
     say "0 is the newest. pick by index or by id, like git"
-    run "als -a -n 6" 2
-    run "als show 1 | head -12" 3
-    run "als path 2"
-    say "-l shows the command that reopens each one"
-    run "als -a -l -n 3" 3
+    run "lsa -a -n 6" 2
+    run "lsa show 1 | head -12" 3
+    run "lsa path 2"
+    say "-l adds the working directory and transcript path"
+    run "lsa -a -l -n 3" 3
     ;;
 esac
 printf "$PS"; sleep 1.5

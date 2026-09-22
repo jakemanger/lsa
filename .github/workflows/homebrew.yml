@@ -1,0 +1,62 @@
+name: Publish Homebrew formula
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published public release tag
+        required: true
+        default: v0.1.0
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: macos-latest
+    steps:
+      - name: Download and verify the published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          test "$(gh repo view --json isPrivate --jq .isPrivate)" = false
+          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = false
+          gh release download "$RELEASE_TAG" --dir assets \
+            --pattern lsa --pattern lsa.rb --pattern SHA256SUMS
+          cd assets
+          awk '$2 == "lsa" || $2 == "lsa.rb"' SHA256SUMS > selected.sha256
+          test "$(wc -l < selected.sha256 | tr -d ' ')" = 2
+          shasum -a 256 -c selected.sha256
+          script_sha=$(shasum -a 256 lsa | cut -d' ' -f1)
+          grep -F "sha256 \"$script_sha\"" lsa.rb
+      - uses: actions/checkout@v4
+        with:
+          repository: jakemanger/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+      - name: Update the tap locally
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          mkdir -p tap/Formula
+          cp assets/lsa.rb tap/Formula/lsa.rb
+          cd tap
+          git add Formula/lsa.rb
+          if ! git diff --cached --quiet; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m "update lsa to $RELEASE_TAG"
+          fi
+      - name: Test the formula before publishing
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+        run: |
+          brew tap jakemanger/tap "file://$PWD/tap"
+          brew install jakemanger/tap/lsa
+          brew test jakemanger/tap/lsa
+      - name: Publish the tested formula
+        working-directory: tap
+        run: git push origin HEAD

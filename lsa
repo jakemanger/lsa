@@ -1,33 +1,32 @@
 #!/usr/bin/env bash
-# als - ls for agent sessions.
+# lsa - ls for agent sessions.
 # Lists every coding-agent transcript on the machine, newest first.
-# https://github.com/jakemanger/als
+# https://github.com/jakemanger/lsa
 set -eu
 
 VERSION="0.1.0"
 
 usage() {
   cat <<'EOF'
-als - ls for agent sessions
+lsa - ls for agent sessions
 
-usage: als [options] [dir]          list sessions started in dir (default: .)
-       als show <id>                print a transcript as plain text
-       als path <id>                print where the transcript lives
-       als resume <id>              reopen the session in its own agent
+usage: lsa [options] [dir]          list sessions started in dir (default: .)
+       lsa show <id>                print a transcript as plain text
+       lsa path <id>                print where the transcript lives
+       lsa resume <id>              reopen the session in its own agent
 
 options:
   -a, --all           every directory, not just dir
   -t, --agent NAME    only this agent (repeatable): claude codex pi gemini
                       qwen cline opencode goose muse openclaw
   -n, --limit N       show at most N sessions
-  -l, --long          show the command that resumes each session
-  -L, --paths         also show where each transcript lives
+  -l, --long          add full directory and transcript path columns
   -h, --help          this text
   -V, --version       version
 
 <id> is the index or the short id from the listing, or any unique prefix
 of the full id. Index 0 is the newest session; indexes are global, so
-als resume 3 is the same session whether you listed with -a or not.
+lsa resume 3 is the same session whether you listed with -a or not.
 EOF
 }
 
@@ -96,8 +95,8 @@ mtimes() {
   return 0
 }
 
-HIDDEN='[als:hidden]'   # title sentinel for files that are not sessions
-CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/als"
+HIDDEN='[lsa:hidden]'   # title sentinel for files that are not sessions
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/lsa"
 CACHE="$CACHE_DIR/index-$VERSION.tsv"
 
 # ---------- the parser: "agent<TAB>path<TAB>mtime" in, "path<TAB>cwd<TAB>title[<TAB>id]" out ----------
@@ -316,8 +315,31 @@ busy_for() { # seconds -> sets BUSY like "2m" (no "ago": it is how long, not how
 }
 
 # ---------- list ----------
+# The index file is not always the transcript (Cline and Muse keep both).
+transcript_path() { # agent index-path id -> sets TRANSCRIPT and SHARED
+  TRANSCRIPT=$2 SHARED=0
+  case $1 in
+    cline) TRANSCRIPT="${2%.json}.messages.json";;
+    muse) TRANSCRIPT=$(sqlite3 -batch -readonly "$2" "select session_log_path from sessions where session_id = '$3'") ;;
+    opencode|goose|openclaw) SHARED=1;;
+  esac
+}
+
+# Long rows: prefix, directory, coloured id, transcript path, title. Measure
+# only the displayed rows, keeping paths intact even in a narrow terminal.
+format_long() {
+  awk -F '\t' '
+    { prefix[NR] = $1; dir[NR] = $2; id[NR] = $3; path[NR] = $4; title[NR] = $5
+      plain = $3; gsub(/\033\[[0-9;]*m/, "", plain); idlen[NR] = length(plain)
+      if (length($2) > dw) dw = length($2)
+      if (idlen[NR] > iw) iw = idlen[NR]
+      if (length($4) > pw) pw = length($4) }
+    END { for (i = 1; i <= NR; i++)
+      printf "%s %-*s %s%*s %-*s %s\n", prefix[i], dw, dir[i], id[i], iw - idlen[i], "", pw, path[i], title[i] }'
+}
+
 list_rows() { # dir cols
-  local dir=$1 cols=$2 shown=0 i=-1 width ts agent f cwd id short n title when proj rows running='' since line
+  local dir=$1 cols=$2 shown=0 i=-1 width ts agent f cwd id short n title when proj rows running='' since location
   rows=$(sessions)
   [ -n "$rows" ] || return 0
   [ $(( NOW - ${rows%%	*} )) -lt "$WORKING_WINDOW" ] && running=$(running_agents)
@@ -341,29 +363,22 @@ list_rows() { # dir cols
     width=$(( cols - 4 - 9 - 9 - 22 - 10 - 4 ))
     [ "$width" -lt 20 ] && width=20
     case $when in *"$MARK"*) ;; *) when=$(printf '%-8s' "$when");; esac   # the busy marker is padded to 8 already
-    if [ "$ALL" = 1 ]; then
+    if [ "$LONG" = 1 ]; then
+      transcript_path "$agent" "$f" "$id"
+      location=$TRANSCRIPT
+      [ "$SHARED" = 1 ] && location="$location [shared database]"
+      printf '%3d %s%-8s%s %s\t%s\t%s%s%s\t%s\t%.*s\n' \
+        "$i" "$COLOR" "$agent" "$C_RESET" "$when" "${cwd:--}" "$C_DIM" "$short" "$C_RESET" "$location" "$width" "$title"
+    elif [ "$ALL" = 1 ]; then
       printf '%3d %s%-8s%s %s %-20.20s %s%-9s%s %.*s\n' \
         "$i" "$COLOR" "$agent" "$C_RESET" "$when" "$proj" "$C_DIM" "$short" "$C_RESET" "$width" "$title"
     else
       printf '%3d %s%-8s%s %s %s%-9s%s %.*s\n' \
         "$i" "$COLOR" "$agent" "$C_RESET" "$when" "$C_DIM" "$short" "$C_RESET" "$((width+21))" "$title"
     fi
-    if [ "$LONG" = 1 ]; then
-      resume_cmd "$agent" "$id" "$f" "$cwd"
-      # the agents look for a session from its own directory, so the pasteable line goes there first
-      line=$RESUME
-      if [ -n "$RESUME" ] && [ -n "$cwd" ] && [ "$agent" != openclaw ] && [ "$cwd" != "$DIR" ] && [ "$cwd" != "$DIRP" ]; then
-        line="cd $(printf '%q' "$cwd") && $RESUME"
-      fi
-      if [ -n "$line" ]; then printf '             %s$ %s%s\n' "$C_DIM" "$line" "$C_RESET"
-      else printf '             %s(no resume command: open it in the app)%s\n' "$C_DIM" "$C_RESET"; fi
-    fi
-    if [ "$PATHS" = 1 ]; then
-      printf '             %s%s%s\n' "$C_DIM" "$f" "$C_RESET"
-    fi
     shown=$((shown+1))
     [ "$LIMIT" -gt 0 ] && [ "$shown" -ge "$LIMIT" ] && break
-  done
+  done | if [ "$LONG" = 1 ]; then format_long; else cat; fi
   return 0
 }
 
@@ -372,8 +387,8 @@ cmd_list() {
   if [ -t 1 ]; then cols=${COLUMNS:-$(tput cols 2>/dev/null || echo 100)}; else cols=200; fi
   out=$(list_rows "$dir" "$cols")
   if [ -n "$out" ]; then printf '%s\n' "$out"
-  elif [ "$ALL" = 1 ]; then echo "als: no sessions found" >&2
-  else echo "als: no sessions in $dir (try als -a)" >&2; fi
+  elif [ "$ALL" = 1 ]; then echo "lsa: no sessions found" >&2
+  else echo "lsa: no sessions in $dir (try lsa -a)" >&2; fi
   return 0
 }
 
@@ -383,15 +398,15 @@ find_one() { # index-or-prefix
   case $prefix in
     [0-9]|[0-9][0-9]|[0-9][0-9][0-9])   # an index: nth row of the newest-first list
       hits=$(sessions | awk -F '\t' -v OFS='\t' -v n="$((prefix+1))" 'NR == n { print $2, $4, $3, $6 }')
-      [ -n "$hits" ] || { echo "als: no session at index $prefix" >&2; return 1; }
+      [ -n "$hits" ] || { echo "lsa: no session at index $prefix" >&2; return 1; }
       printf '%s\n' "$hits"; return 0;;
   esac
   hits=$(sessions | awk -F '\t' -v OFS='\t' -v p="$prefix" 'index($4, p) == 1 { print $2, $4, $3, $6 }')
   n=$(printf '%s' "$hits" | grep -c .)
   case $n in
-    0) echo "als: no session starts with '$prefix'" >&2; return 1;;
+    0) echo "lsa: no session starts with '$prefix'" >&2; return 1;;
     1) printf '%s\n' "$hits";;
-    *) echo "als: '$prefix' is ambiguous:" >&2; printf '%s\n' "$hits" | cut -f2 >&2; return 1;;
+    *) echo "lsa: '$prefix' is ambiguous:" >&2; printf '%s\n' "$hits" | cut -f2 >&2; return 1;;
   esac
 }
 
@@ -411,12 +426,12 @@ cmd_show() {
     goose) sqlite3 -batch -readonly -separator '	' "$f" "select role, replace(json_extract(content_json, '\$[0].text'), char(10), ' ')
         from messages where session_id = '$id' and json_extract(content_json, '\$[0].text') is not null
         and json_extract(content_json, '\$[0].text') not like '<turn-context>%' order by id" | as_turns; return;;
-    muse) command -v jq >/dev/null || { echo "als: 'show' needs jq (brew install jq / apt install jq)" >&2; exit 1; }
+    muse) command -v jq >/dev/null || { echo "lsa: 'show' needs jq (brew install jq / apt install jq)" >&2; exit 1; }
       f=$(sqlite3 -batch -readonly "$f" "select session_log_path from sessions where session_id = '$id'")
       jq -r 'select(.payload_type == "runtime.session") | .payload.event
         | if .kind == "started" and (.prompt // "") != "" then "\n## user\n" + .prompt
           elif .kind == "assistant_message_committed" then "\n## assistant\n" + .text else empty end' "$f"; return;;
-    openclaw) command -v jq >/dev/null || { echo "als: 'show' needs jq (brew install jq / apt install jq)" >&2; exit 1; }
+    openclaw) command -v jq >/dev/null || { echo "lsa: 'show' needs jq (brew install jq / apt install jq)" >&2; exit 1; }
       sqlite3 -batch -readonly "$f" "select event_json from transcript_events where session_id = '$id' and json_extract(event_json, '\$.type') = 'message' order by seq" \
         | jq -r '.message as $m | ($m.content | if type=="string" then [.] else map(.text // empty) end) as $p | select($p|length>0) | "\n## " + $m.role + "\n" + ($p|join("\n"))'
       return;;
@@ -452,19 +467,25 @@ cmd_show() {
       select(.type=="user" or .type=="gemini") | "\n## " + .type + "\n" + (.content | if type=="string" then . else map(.text // empty)|join("\n") end)';;
     cline) f="${f%.json}.messages.json"; filter='
       .messages[] | "\n## " + .role + "\n" + (.content|map(.text // empty)|join("\n") | sub("^<user_input[^>]*>"; "") | sub("</user_input>$"; ""))';;
-    *) echo "als: show does not know the $agent format yet; the session is at" >&2; echo "$f" >&2; exit 1;;
+    *) echo "lsa: show does not know the $agent format yet; the session is at" >&2; echo "$f" >&2; exit 1;;
   esac
-  command -v jq >/dev/null || { echo "als: 'show' needs jq (brew install jq / apt install jq)" >&2; exit 1; }
+  command -v jq >/dev/null || { echo "lsa: 'show' needs jq (brew install jq / apt install jq)" >&2; exit 1; }
   jq -r "$filter" "$f"
 }
 
-cmd_path()   { local hit; hit=$(find_one "$1") || exit 1; printf '%s\n' "$(printf '%s' "$hit" | cut -f3)"; }
+cmd_path() {
+  local hit agent id f cwd
+  hit=$(find_one "$1") || exit 1
+  IFS=$'\t' read -r agent id f cwd <<< "$hit"
+  transcript_path "$agent" "$f" "$id"
+  printf '%s\n' "$TRANSCRIPT"
+}
 cmd_resume() {
   local agent id f cwd
   IFS=$'\t' read -r agent id f cwd < <(find_one "$1")
   [ "$cwd" = - ] && cwd=''
   resume_cmd "$agent" "$id" "$f" "$cwd"
-  [ -n "$RESUME" ] || { echo "als: $agent has no resume command; the session is at" >&2; echo "$f" >&2; exit 1; }
+  [ -n "$RESUME" ] || { echo "lsa: $agent has no resume command; the session is at" >&2; echo "$f" >&2; exit 1; }
   # most agents only find a session from the directory it was started in
   [ -d "$cwd" ] && cd "$cwd"
   # shellcheck disable=SC2086
@@ -472,7 +493,7 @@ cmd_resume() {
 }
 
 # ---------- args ----------
-ALL=0 LONG=0 PATHS=0 LIMIT=0 AGENTS='' DIR=''
+ALL=0 LONG=0 LIMIT=0 AGENTS='' DIR=''
 case ${1:-} in
   show|path|resume) [ $# -ge 2 ] || { usage >&2; exit 2; }; "cmd_$1" "$2"; exit;;
 esac
@@ -480,16 +501,15 @@ while [ $# -gt 0 ]; do
   case $1 in
     -a|--all) ALL=1;;
     -l|--long) LONG=1;;
-    -L|--paths) PATHS=1;;
     -n|--limit) LIMIT=$2; shift;;
     -t|--agent) AGENTS="$AGENTS $2"; shift;;
     -h|--help) usage; exit 0;;
-    -V|--version) echo "als $VERSION"; exit 0;;
-    -*) echo "als: unknown option $1" >&2; usage >&2; exit 2;;
+    -V|--version) echo "lsa $VERSION"; exit 0;;
+    -*) echo "lsa: unknown option $1" >&2; usage >&2; exit 2;;
     *) DIR=$1;;
   esac
   shift
 done
-DIR=$(cd "${DIR:-.}" 2>/dev/null && pwd) || { echo "als: no such directory" >&2; exit 1; }
+DIR=$(cd "${DIR:-.}" 2>/dev/null && pwd) || { echo "lsa: no such directory" >&2; exit 1; }
 DIRP=$(cd "$DIR" && pwd -P)   # agents may record either the logical or the resolved path
 cmd_list "$DIR"
