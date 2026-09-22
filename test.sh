@@ -38,8 +38,8 @@ check() { # name expected actual
 out=$(cd "$proj" && bash "$ALS")
 check "cwd listing has claude and codex only" "claude codex" "$(printf '%s\n' "$out" | awk '{print $1}' | sort | tr '\n' ' ' | sed 's/ $//')"
 check "sidechain skipped" "" "$(printf '%s\n' "$out" | grep SIDECHAIN || true)"
-check "claude title unescaped" 'fix the "login" bug please' "$(printf '%s\n' "$out" | grep claude | sed 's/.*aaaa1111  //')"
-check "codex skips injected prompts" "add subtitles" "$(printf '%s\n' "$out" | grep codex | sed 's/.*bbbb2222  //')"
+check "claude title unescaped" 'fix the "login" bug please' "$(printf '%s\n' "$out" | grep claude | sed 's/.*aaaa  *//')"
+check "codex skips injected prompts" "add subtitles" "$(printf '%s\n' "$out" | grep codex | sed 's/.*bbbb  *//')"
 
 all=$(bash "$ALS" -a)
 check "-a lists three" "3" "$(printf '%s\n' "$all" | grep -c .)"
@@ -48,7 +48,11 @@ check "-n 1 limits" "1" "$(bash "$ALS" -a -n 1 | grep -c .)"
 check "-l prints resume" "$ codex resume bbbb2222-0000-0000-0000-000000000000" "$(bash "$ALS" -a -t codex -l | sed -n 2p | sed 's/^ *//')"
 check "-L prints path" "$tmp/.claude/projects/x/aaaa1111-0000-0000-0000-000000000000.jsonl" "$(bash "$ALS" -a -t claude -L | sed -n 2p | sed 's/^ *//')"
 check "-l for pi uses the file" "$ pi --session $tmp/.pi/agent/sessions/x/2026-09-22T09-00-00-000Z_cccc3333-0000-0000-0000-000000000000.jsonl" "$(bash "$ALS" -a -t pi -l | sed -n 2p | sed 's/^ *//')"
-check "fg is a subcommand" "0" "$(bash "$ALS" fg 2>/dev/null; [ $? = 2 ] && echo 0)"
+check "short ids are 4 chars when unique" "aaaa bbbb cccc" "$(bash "$ALS" -a | awk '{print $5}' | sort | tr '\n' ' ' | sed 's/ $//')"
+cp "$tmp/.claude/projects/x/aaaa1111-0000-0000-0000-000000000000.jsonl" "$tmp/.claude/projects/x/aaaa1199-0000-0000-0000-000000000000.jsonl"
+check "short ids grow until unique" "aaaa111 aaaa119" "$(bash "$ALS" -a -t claude | awk '{print $5}' | sort | tr '\n' ' ' | sed 's/ $//')"
+check "short id resolves" "$tmp/.claude/projects/x/aaaa1199-0000-0000-0000-000000000000.jsonl" "$(bash "$ALS" path aaaa1199)"
+rm "$tmp/.claude/projects/x/aaaa1199-0000-0000-0000-000000000000.jsonl"
 check "path by prefix" "$tmp/.pi/agent/sessions/x/2026-09-22T09-00-00-000Z_cccc3333-0000-0000-0000-000000000000.jsonl" "$(bash "$ALS" path cccc)"
 check "unknown prefix fails" "1" "$(bash "$ALS" path zzzz >/dev/null 2>&1; echo $?)"
 check "empty dir hint" "als: no sessions in $tmp (try als -a)" "$(cd "$tmp" && bash "$ALS" 2>&1)"

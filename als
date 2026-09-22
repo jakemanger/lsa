@@ -13,8 +13,7 @@ als - ls for agent sessions
 usage: als [options] [dir]          list sessions started in dir (default: .)
        als show <id>                print a transcript as plain text
        als path <id>                print the transcript's file path
-       als fg <id>                  reopen the session in its own agent
-       als resume <id>              same as fg
+       als resume <id>              reopen the session in its own agent
 
 options:
   -a, --all           every directory, not just dir
@@ -25,8 +24,7 @@ options:
   -h, --help          this text
   -V, --version       version
 
-<id> is any unique prefix of the session id shown in the listing.
-Think jobs and fg: als lists, als fg picks one up again.
+<id> is the short id from the listing, or any unique prefix of the full one.
 EOF
 }
 
@@ -66,13 +64,12 @@ json_first() { # file key
 
 unescape() { sed -e 's/\\n/ /g' -e 's/\\t/ /g' -e 's/\\"/"/g' -e 's/\\\\/\\/g'; }
 
-# ---------- per-agent readers: cwd, id, title ----------
-# Each reader prints three lines: cwd, id, title.
+# ---------- per-agent readers ----------
+# Each reader prints two lines: cwd, title (the first prompt).
 
 read_claude() { # file
   local f=$1 line
   printf '%s\n' "$(json_first "$f" cwd)"
-  printf '%s\n' "$(basename "$f" .jsonl)"
   line=$(grep -m1 '"type":"user"' "$f" 2>/dev/null || true)
   printf '%s\n' "$line" | grep -oE '"text":"([^"\\]|\\.)*"' | head -1 | sed -e 's/^"text":"//' -e 's/"$//' | unescape
 }
@@ -80,7 +77,6 @@ read_claude() { # file
 read_codex() { # file
   local f=$1
   printf '%s\n' "$(json_first "$f" cwd)"
-  printf '%s\n' "$(json_first "$f" session_id)"
   # skip the AGENTS.md / environment_context messages Codex injects first
   grep '"role":"user"' "$f" 2>/dev/null \
     | grep -oE '"text":"([^"\\]|\\.)*"' \
@@ -91,20 +87,30 @@ read_codex() { # file
 read_pi() { # file
   local f=$1
   printf '%s\n' "$(json_first "$f" cwd)"
-  printf '%s\n' "$(json_first "$f" id)"
   grep -m1 '"role":"user"' "$f" 2>/dev/null \
     | grep -oE '"text":"([^"\\]|\\.)*"' | head -1 \
     | sed -e 's/^"text":"//' -e 's/"$//' | unescape
 }
 
-# ---------- find every transcript: "mtime<TAB>agent<TAB>path" ----------
+# ---------- find every transcript: "mtime<TAB>agent<TAB>path<TAB>id<TAB>shortlen" ----------
+# The id comes from the file name, so nothing is opened. shortlen is the
+# length of the shortest prefix unique among all ids (git-style, minimum 4).
 find_all() {
-  [ -d "$CLAUDE_DIR" ] && find "$CLAUDE_DIR" -name '*.jsonl' ! -name 'agent-*' -print0 2>/dev/null \
-    | mtimes | sed $'s/\t/\tclaude\t/'
-  [ -d "$CODEX_DIR" ] && find "$CODEX_DIR" -name 'rollout-*.jsonl' -print0 2>/dev/null \
-    | mtimes | sed $'s/\t/\tcodex\t/'
-  [ -d "$PI_DIR" ] && find "$PI_DIR" -name '*.jsonl' -print0 2>/dev/null \
-    | mtimes | sed $'s/\t/\tpi\t/'
+  {
+    [ -d "$CLAUDE_DIR" ] && find "$CLAUDE_DIR" -name '*.jsonl' ! -name 'agent-*' -print0 2>/dev/null \
+      | mtimes | sed -E $'s/\t(.*\\/)([^/]*)\\.jsonl$/\tclaude\t&\t\\2/'
+    [ -d "$CODEX_DIR" ] && find "$CODEX_DIR" -name 'rollout-*.jsonl' -print0 2>/dev/null \
+      | mtimes | sed -E $'s/\t(.*\\/)rollout-[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}-([^/]*)\\.jsonl$/\tcodex\t&\t\\2/'
+    [ -d "$PI_DIR" ] && find "$PI_DIR" -name '*.jsonl' -print0 2>/dev/null \
+      | mtimes | sed -E $'s/\t(.*\\/)[^/_]*_([^/]*)\\.jsonl$/\tpi\t&\t\\2/'
+  } | sed $'s/\t\t/\t/' | sort -t $'\t' -k4,4 | awk -F '\t' -v OFS='\t' '
+    function common(a, b,   i, n) { n = length(a) < length(b) ? length(a) : length(b)
+      for (i = 1; i <= n; i++) if (substr(a, i, 1) != substr(b, i, 1)) return i - 1; return n }
+    { line[NR] = $0; id[NR] = $4 }
+    END { for (i = 1; i <= NR; i++) { n = 4
+        if (i > 1  && common(id[i], id[i-1]) + 1 > n) n = common(id[i], id[i-1]) + 1
+        if (i < NR && common(id[i], id[i+1]) + 1 > n) n = common(id[i], id[i+1]) + 1
+        print line[i], n } }'
   return 0
 }
 
@@ -124,11 +130,11 @@ resume_cmd() { # agent id file
 
 # ---------- list ----------
 list_rows() { # dir cols
-  local dir=$1 cols=$2 shown=0 width ts agent f cwd id title color when proj
-  find_all | sort -rn | while IFS=$'\t' read -r ts agent f; do
+  local dir=$1 cols=$2 shown=0 width ts agent f cwd id short n title color when proj
+  find_all | sort -rn | while IFS=$'\t' read -r ts agent f id n; do
     want_agent "$agent" || continue
-    { read -r cwd; read -r id; read -r title; } < <("read_$agent" "$f")
-    [ -z "$id" ] && continue
+    { read -r cwd; read -r title; } < <("read_$agent" "$f")
+    short=${id:0:$n}
     if [ "$ALL" = 0 ] && [ "$cwd" != "$dir" ] && [ "$cwd" != "$DIRP" ]; then continue; fi
     [ -z "$title" ] && title="${C_DIM}(empty)${C_RESET}"
     case $agent in claude) color=$C_CLAUDE;; codex) color=$C_CODEX;; *) color=$C_PI;; esac
@@ -137,11 +143,11 @@ list_rows() { # dir cols
     width=$(( cols - 8 - 9 - 22 - 10 - 4 ))
     [ "$width" -lt 20 ] && width=20
     if [ "$ALL" = 1 ]; then
-      printf '%s%-7s%s %-8s %-20.20s %s%-9.8s%s %.*s\n' \
-        "$color" "$agent" "$C_RESET" "$when" "$proj" "$C_DIM" "$id" "$C_RESET" "$width" "$title"
+      printf '%s%-7s%s %-8s %-20.20s %s%-9s%s %.*s\n' \
+        "$color" "$agent" "$C_RESET" "$when" "$proj" "$C_DIM" "$short" "$C_RESET" "$width" "$title"
     else
-      printf '%s%-7s%s %-8s %s%-9.8s%s %.*s\n' \
-        "$color" "$agent" "$C_RESET" "$when" "$C_DIM" "$id" "$C_RESET" "$((width+21))" "$title"
+      printf '%s%-7s%s %-8s %s%-9s%s %.*s\n' \
+        "$color" "$agent" "$C_RESET" "$when" "$C_DIM" "$short" "$C_RESET" "$((width+21))" "$title"
     fi
     if [ "$LONG" = 1 ]; then
       printf '        %s$ %s%s\n' "$C_DIM" "$(resume_cmd "$agent" "$id" "$f")" "$C_RESET"
@@ -167,13 +173,8 @@ cmd_list() {
 
 # ---------- find one session by id prefix -> "agent<TAB>id<TAB>path" ----------
 matching_ids() { # prefix
-  local prefix=$1 ts agent f id
-  find_all | while IFS=$'\t' read -r ts agent f; do
-    case $agent in
-      claude) id=$(basename "$f" .jsonl);;
-      codex)  id=$(basename "$f" .jsonl | sed 's/^rollout-[0-9T:-]*-//');;
-      pi)     id=$(basename "$f" .jsonl | sed 's/^[^_]*_//');;
-    esac
+  local prefix=$1 ts agent f id n
+  find_all | while IFS=$'\t' read -r ts agent f id n; do
     case $id in "$prefix"*) printf '%s\t%s\t%s\n' "$agent" "$id" "$f";; esac
   done
   return 0
@@ -226,7 +227,6 @@ cmd_show() {
 }
 
 cmd_path()   { local hit; hit=$(find_one "$1") || exit 1; printf '%s\n' "${hit##*	}"; }
-cmd_fg() { cmd_resume "$@"; }
 cmd_resume() {
   local agent id f
   IFS=$'\t' read -r agent id f < <(find_one "$1")
@@ -236,7 +236,7 @@ cmd_resume() {
 # ---------- args ----------
 ALL=0 LONG=0 PATHS=0 LIMIT=0 AGENTS='' DIR=''
 case ${1:-} in
-  show|path|fg|resume) [ $# -ge 2 ] || { usage >&2; exit 2; }; "cmd_$1" "$2"; exit;;
+  show|path|resume) [ $# -ge 2 ] || { usage >&2; exit 2; }; "cmd_$1" "$2"; exit;;
 esac
 while [ $# -gt 0 ]; do
   case $1 in
