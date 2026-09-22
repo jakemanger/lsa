@@ -4,7 +4,7 @@ set -eu
 cd "$(dirname "$0")"; ALS=$PWD/als
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 export HOME=$tmp NO_COLOR=1
-unset CLAUDE_CONFIG_DIR CODEX_HOME PI_CODING_AGENT_DIR
+unset CLAUDE_CONFIG_DIR CODEX_HOME PI_CODING_AGENT_DIR XDG_CACHE_HOME
 proj=$tmp/proj; mkdir -p "$proj"
 
 mkdir -p "$tmp/.claude/projects/x" "$tmp/.codex/sessions/2026/09/22" "$tmp/.pi/agent/sessions/x"

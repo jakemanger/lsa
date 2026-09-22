@@ -50,48 +50,61 @@ mtimes() {
   return 0
 }
 
-ago() { # seconds since epoch -> "3m ago"
-  local d=$(( $(date +%s) - $1 ))
-  if   [ "$d" -lt 60 ];     then echo "${d}s ago"
-  elif [ "$d" -lt 3600 ];   then echo "$((d/60))m ago"
-  elif [ "$d" -lt 86400 ];  then echo "$((d/3600))h ago"
-  elif [ "$d" -lt 2592000 ]; then echo "$((d/86400))d ago"
-  else echo "$((d/2592000))mo ago"; fi
+NOW=$(date +%s)
+ago() { # seconds since epoch -> sets AGO to "3m ago" (no subshell: called per row)
+  local d=$(( NOW - $1 ))
+  if   [ "$d" -lt 60 ];     then AGO="${d}s ago"
+  elif [ "$d" -lt 3600 ];   then AGO="$((d/60))m ago"
+  elif [ "$d" -lt 86400 ];  then AGO="$((d/3600))h ago"
+  elif [ "$d" -lt 2592000 ]; then AGO="$((d/86400))d ago"
+  else AGO="$((d/2592000))mo ago"; fi
 }
 
-# first "key":"value" string on the first line that has it (JSON escapes kept)
-json_first() { # file key
-  grep -m1 -oE "\"$2\":\"([^\"\\\\]|\\\\.)*\"" "$1" 2>/dev/null | head -1 | sed -e "s/^\"$2\":\"//" -e 's/"$//'
+# ---------- the parser: "agent<TAB>path<TAB>mtime" in, "path<TAB>cwd<TAB>title" out ----------
+# One awk for every file. It reads the head of each transcript and stops as
+# soon as it has the cwd and the first real prompt, so multi-megabyte
+# sessions cost the same as tiny ones. A session with no prompt yet is only
+# cached once it is ten minutes old, so a session being typed into stays fresh.
+parse() {
+  awk -F '\t' -v now="$NOW" '
+    # JSON string starting right after the opening quote; unescapes; capped
+    function jstr(s,   out) {
+      match(s, /^([^"\\]|\\.)*/); out = substr(s, 1, RLENGTH)
+      gsub(/\\[ntr]/, " ", out); gsub(/\\"/, "\"", out); gsub(/\\\\/, "\\", out)
+      return substr(out, 1, 300) }
+    function text_of(line,   i) {
+      if ((i = index(line, "\"text\":\""))) return jstr(substr(line, i + 8, 2000))
+      if ((i = index(line, "\"content\":\""))) return jstr(substr(line, i + 11, 2000))
+      return "" }
+    { agent = $1; f = $2; cwd = ""; title = ""; n = 0; bytes = 0
+      while ((getline line < f) > 0) {
+        # the prompt is in the first dozen records of every format, before any tool output
+        if (++n > 60 || (bytes += length(line)) > 1048576) break
+        if (cwd == "" && (i = index(line, "\"cwd\":\""))) cwd = jstr(substr(line, i + 7, 2000))
+        if (title == "") {
+          if (agent == "claude") { if (index(line, "\"type\":\"user\"")) title = text_of(line) }
+          else if (index(line, "\"role\":\"user\"")) { t = text_of(line)
+            if (agent != "codex" || t !~ /^(<|# AGENTS\.md)/) title = t } }
+        if (cwd != "" && title != "") break }
+      close(f)
+      if (title != "" || now - $3 > 600) { gsub(/\t/, " ", title); print f "\t" cwd "\t" title } }'
 }
 
-unescape() { sed -e 's/\\n/ /g' -e 's/\\t/ /g' -e 's/\\"/"/g' -e 's/\\\\/\\/g'; }
+# ---------- the cache: path -> cwd, title. Immutable facts, so never invalidated ----------
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/als"
+CACHE="$CACHE_DIR/index-$VERSION.tsv"
 
-# ---------- per-agent readers ----------
-# Each reader prints two lines: cwd, title (the first prompt).
-
-read_claude() { # file
-  local f=$1 line
-  printf '%s\n' "$(json_first "$f" cwd)"
-  line=$(grep -m1 '"type":"user"' "$f" 2>/dev/null || true)
-  printf '%s\n' "$line" | grep -oE '"text":"([^"\\]|\\.)*"' | head -1 | sed -e 's/^"text":"//' -e 's/"$//' | unescape
-}
-
-read_codex() { # file
-  local f=$1
-  printf '%s\n' "$(json_first "$f" cwd)"
-  # skip the AGENTS.md / environment_context messages Codex injects first
-  grep '"role":"user"' "$f" 2>/dev/null \
-    | grep -oE '"text":"([^"\\]|\\.)*"' \
-    | sed -e 's/^"text":"//' -e 's/"$//' \
-    | grep -vE '^(<|# AGENTS\.md)' | head -1 | unescape
-}
-
-read_pi() { # file
-  local f=$1
-  printf '%s\n' "$(json_first "$f" cwd)"
-  grep -m1 '"role":"user"' "$f" 2>/dev/null \
-    | grep -oE '"text":"([^"\\]|\\.)*"' | head -1 \
-    | sed -e 's/^"text":"//' -e 's/"$//' | unescape
+# stdin: find_all rows -> the same rows with cwd and title appended
+enrich() {
+  local rows misses
+  rows=$(cat)
+  [ -n "$rows" ] || return 0
+  mkdir -p "$CACHE_DIR"; [ -f "$CACHE" ] || : > "$CACHE"
+  misses=$(printf '%s\n' "$rows" | awk -F '\t' -v c="$CACHE" 'FILENAME == c { seen[$1] = 1; next } !($3 in seen) { print $2 "\t" $3 "\t" $1 }' "$CACHE" -)
+  if [ -n "$misses" ]; then printf '%s\n' "$misses" | parse >> "$CACHE"; fi
+  printf '%s\n' "$rows" | awk -F '\t' -v OFS='\t' -v c="$CACHE" '
+    FILENAME == c { cwd[$1] = $2; title[$1] = $3; next }
+    { print $0, ($3 in cwd ? cwd[$3] : ""), ($3 in title ? title[$3] : "") }' "$CACHE" -
 }
 
 # ---------- find every transcript: "mtime<TAB>agent<TAB>path<TAB>id<TAB>shortlen" ----------
@@ -133,16 +146,15 @@ resume_cmd() { # agent id file
 # ---------- list ----------
 list_rows() { # dir cols
   local dir=$1 cols=$2 shown=0 i=-1 width ts agent f cwd id short n title color when proj
-  find_all | sort -rn | while IFS=$'\t' read -r ts agent f id n; do
+  find_all | sort -rn | enrich | while IFS=$'\t' read -r ts agent f id n cwd title; do
     i=$((i+1))
     want_agent "$agent" || continue
-    { read -r cwd; read -r title; } < <("read_$agent" "$f")
     short=${id:0:$n}
     if [ "$ALL" = 0 ] && [ "$cwd" != "$dir" ] && [ "$cwd" != "$DIRP" ]; then continue; fi
     [ -z "$title" ] && title="${C_DIM}(empty)${C_RESET}"
     case $agent in claude) color=$C_CLAUDE;; codex) color=$C_CODEX;; *) color=$C_PI;; esac
-    when=$(ago "$ts")
-    proj=$(basename "${cwd:-?}")
+    ago "$ts"; when=$AGO
+    proj=${cwd##*/}; [ -n "$proj" ] || proj='?'
     width=$(( cols - 4 - 8 - 9 - 22 - 10 - 4 ))
     [ "$width" -lt 20 ] && width=20
     if [ "$ALL" = 1 ]; then
