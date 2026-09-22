@@ -176,6 +176,9 @@ The handoff carries the readable transcript, without images or the original
 agent's internal state. Very long chats may need trimming to fit the new
 model's context window.
 
+Piped input and session resume verified with Claude Code 2.1.277, Codex CLI
+0.155.1, and Pi 0.85.1 using the Claude bridge.
+
 ## Where it looks
 
 | Agent       | Where                                                       | Override              |
