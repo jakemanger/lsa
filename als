@@ -317,7 +317,7 @@ busy_for() { # seconds -> sets BUSY like "2m" (no "ago": it is how long, not how
 
 # ---------- list ----------
 list_rows() { # dir cols
-  local dir=$1 cols=$2 shown=0 i=-1 width ts agent f cwd id short n title when proj rows running='' since
+  local dir=$1 cols=$2 shown=0 i=-1 width ts agent f cwd id short n title when proj rows running='' since line
   rows=$(sessions)
   [ -n "$rows" ] || return 0
   [ $(( NOW - ${rows%%	*} )) -lt "$WORKING_WINDOW" ] && running=$(running_agents)
@@ -350,7 +350,12 @@ list_rows() { # dir cols
     fi
     if [ "$LONG" = 1 ]; then
       resume_cmd "$agent" "$id" "$f" "$cwd"
-      if [ -n "$RESUME" ]; then printf '             %s$ %s%s\n' "$C_DIM" "$RESUME" "$C_RESET"
+      # the agents look for a session from its own directory, so the pasteable line goes there first
+      line=$RESUME
+      if [ -n "$RESUME" ] && [ -n "$cwd" ] && [ "$agent" != openclaw ] && [ "$cwd" != "$DIR" ] && [ "$cwd" != "$DIRP" ]; then
+        line="cd $(printf '%q' "$cwd") && $RESUME"
+      fi
+      if [ -n "$line" ]; then printf '             %s$ %s%s\n' "$C_DIM" "$line" "$C_RESET"
       else printf '             %s(no resume command: open it in the app)%s\n' "$C_DIM" "$C_RESET"; fi
     fi
     if [ "$PATHS" = 1 ]; then

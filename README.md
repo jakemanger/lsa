@@ -56,8 +56,10 @@ and an issue with what you see, good or bad, gets it a tick. Want another
 agent? Open an issue with one session file.
 
 Resume runs the agent's own command (`claude --resume`, `codex resume`,
-`muse resume`, and so on) from the directory the session was started in;
-`als -l` prints it if you would rather paste it yourself. OpenClaw sessions
+`muse resume`, and so on) from the directory the session was started in,
+because most agents only find a session from there. `als -l` prints the
+same thing as a line you can paste, `cd` included when you are somewhere
+else. OpenClaw sessions
 are chats rather than projects, so their directory column shows the session
 key instead.
 
