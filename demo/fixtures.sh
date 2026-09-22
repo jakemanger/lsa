@@ -11,6 +11,8 @@ H=$1
 mkdir -p "$H"
 P="$H/code"   # the fake projects live here
 mkdir -p "$P/wren" "$P/lantern" "$P/tidepool" "$P/quill"
+mkdir -p "$H/.config/goose"
+printf 'extensions: {}\n' > "$H/.config/goose/config.yaml"
 
 # age in seconds -> touch -t stamp (portable to BSD and GNU touch)
 stamp() { date -r $(( $(date +%s) - $1 )) +%Y%m%d%H%M.%S 2>/dev/null || date -d "@$(( $(date +%s) - $1 ))" +%Y%m%d%H%M.%S; }
@@ -71,14 +73,14 @@ openclaw() { # id key age prompt
 }
 goose_real() { # cwd age prompt -> a real session, so the demo can resume it
   ( cd "$1" && HOME=$H GOOSE_PROVIDER=ollama GOOSE_MODEL=${DEMO_MODEL:-qwen2.5:3b} GOOSE_TELEMETRY_ENABLED=false \
-      goose run -t "$3" >/dev/null 2>&1 ) || { echo "demo: goose run failed (is ollama running with ${DEMO_MODEL:-qwen2.5:3b}?)" >&2; return 1; }
+      goose run --no-profile --system 'Write brief release notes in plain text. Do not call tools or edit files.' -t "$3" >/dev/null 2>&1 ) || { echo "demo: goose run failed (is ollama running with ${DEMO_MODEL:-qwen2.5:3b}?)" >&2; return 1; }
   sqlite3 "$H/.local/share/goose/sessions/sessions.db" "update sessions set updated_at = datetime('now', '-$2 seconds')"
 }
 
 claude   3e1f9c2a-7b44-4d0e-9a1c-0f5e6d7c8b9a "$P/wren"     120     "add a --dry-run flag to the deploy script"
 codex    01a0c7d2-9e1b-7c3a-8f2d-4b6a5c7d8e9f "$P/wren"     900     "the flaky test in api/test_auth.py: find out why and fix it"
 pi       01a0c7b8-1234-7abc-9def-0123456789ab "$P/lantern"  3600    "rename Widget to Panel across the codebase and update the docs"
-goose_real                                    "$P/wren"     5400    "write three release-note bullets for a CLI that lists agent sessions"
+goose_real                                    "$P/wren"     5400    "draft a release note for lsa: it lists coding agent sessions and can print or resume a conversation"
 claude   9b2d4e6f-1a3c-4b5d-8e7f-6a5b4c3d2e1f "$P/lantern"  7200    "why does the build take 4 minutes? profile it"
 muse     01a0c9aa-4b3c-7d2e-8f1a-2b3c4d5e6f7a "$P/tidepool" 9000    "add retries to the upload client"
 opencode ses_4f7a2c9e1b3d                     "$P/tidepool" 10800   "Migrate the settings page to the new form component"

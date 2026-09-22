@@ -1,0 +1,46 @@
+#!/usr/bin/expect -f
+# A real interactive handoff. Use Sonnet with tools and custom settings disabled
+# to keep the recording focused on the invented release notes.
+set timeout 120
+encoding system utf-8
+set trust_sent 0
+spawn -noecho bash -c {lsa show 2026 | claude --setting-sources "" --strict-mcp-config --tools "" --model sonnet --effort low --permission-mode manual "Continue from Goose. Make the release notes one sentence."}
+
+expect_before {
+    -re {\x1b\[6n} { send "\033\[1;1R"; exp_continue }
+    -re {Enter.*confirm} {
+        if {!$trust_sent} {
+            set trust_sent 1
+            sleep 0.5
+            send "\033\[B"
+            sleep 0.2
+            send "\033\[13u"
+        }
+        exp_continue
+    }
+    timeout { puts stderr "demo: Claude handoff timed out"; exit 1 }
+    eof { puts stderr "demo: Claude exited before the handoff finished"; exit 1 }
+}
+
+# Wait for the actual answer and idle title before sending a second turn.
+expect -re {⏺}
+expect -re {\x1b\]0;✳}
+sleep 2
+foreach ch [split "Shorter, please." ""] { send -- $ch; sleep 0.04 }
+sleep 0.4
+send "\033\[13u"
+expect -re {⏺}
+expect -re {\x1b\]0;✳}
+# Keep reading while holding the last frame so Claude can finish redrawing.
+expect_before
+expect -timeout 5 {
+    timeout {}
+    eof { puts stderr "demo: Claude exited after the handoff"; exit 1 }
+}
+
+# End the capture on the conversation, then close the test session quietly.
+log_user 0
+send "\003"
+sleep 0.5
+send "\003"
+expect -timeout 10 eof
