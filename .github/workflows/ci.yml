@@ -1,0 +1,39 @@
+name: CI
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get install -y shellcheck jq
+        if: runner.os == 'Linux'
+      - run: brew install shellcheck jq
+        if: runner.os == 'macOS'
+      - run: make lint
+      - run: make test
+
+  release:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - run: make deb
+      - name: Print the sha256 for Formula/als.rb
+        run: curl -fsSL "https://github.com/${{ github.repository }}/archive/refs/tags/${{ github.ref_name }}.tar.gz" | sha256sum
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/als_*_all.deb
+            dist/als_all.deb
+            als
