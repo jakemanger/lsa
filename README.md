@@ -10,12 +10,10 @@ directory. `-a` lists them all. Listing takes about as long as `ls -l`.
 
 ## Install
 
-One file, on macOS or Linux:
+One command, on macOS or Linux:
 
 ```sh
-curl -fLO https://github.com/jakemanger/lsa/releases/latest/download/lsa
-sudo mv lsa /usr/local/bin/lsa
-sudo chmod +x /usr/local/bin/lsa
+curl -fLO https://github.com/jakemanger/lsa/releases/latest/download/lsa && sudo mv lsa /usr/local/bin/lsa && sudo chmod +x /usr/local/bin/lsa
 ```
 
 **Oh My Zsh?** Run `unalias lsa` once in your current terminal. Add
