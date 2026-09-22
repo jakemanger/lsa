@@ -1,7 +1,8 @@
 # lsa
 
-`ls` for agent sessions. One command lists every session from every coding
-agent on the machine, newest first, then prints or reopens any of them.
+`ls` for agent sessions. List every session from every coding agent on the
+machine, newest first. Print a conversation, reopen it, or pipe it to another
+agent.
 
 ![lsa listing sessions](demo/list.gif)
 
