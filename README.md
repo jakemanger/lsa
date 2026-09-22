@@ -155,6 +155,27 @@ turn, an error, or resuming Pi. Those files have distinct ids even though
 their first prompt matches, so `lsa` lists them separately. Use `-t pi` to
 see only the Pi conversations, or `-l` to inspect each backing file.
 
+### Switch agents
+
+Pick a session from `lsa`, then run one of these from its project directory:
+
+```sh
+# Continue the conversation in Claude Code
+lsa show 659c | claude -p "Continue this conversation from where it left off."
+
+# Or hand it to Codex or Pi
+lsa show 659c | codex exec "Continue this conversation from where it left off."
+lsa show 659c | pi -p "Continue this conversation from where it left off."
+```
+
+The source session can be from any supported agent. Each command starts a
+new session, runs a turn, and exits. Run `lsa` again, then
+`lsa resume <new-id>` to keep chatting interactively in the new agent.
+
+The handoff carries the readable transcript, without images or the original
+agent's internal state. Very long chats may need trimming to fit the new
+model's context window.
+
 ## Where it looks
 
 | Agent       | Where                                                       | Override              |
