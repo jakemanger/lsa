@@ -13,12 +13,16 @@ directory. `-a` lists them all. Listing takes about as long as `ls -l`.
 One command, on macOS or Linux:
 
 ```sh
-curl -fLO https://github.com/jakemanger/lsa/releases/latest/download/lsa && sudo mv lsa /usr/local/bin/lsa && sudo chmod +x /usr/local/bin/lsa
+curl -fLO https://github.com/jakemanger/lsa/releases/latest/download/lsa && sudo install lsa /usr/local/bin/
 ```
 
-**Oh My Zsh?** Run `unalias lsa` once in your current terminal. Add
-`unalias lsa 2>/dev/null` to the end of `~/.zshrc` to keep it working in new
-terminals. Oh My Zsh otherwise uses `lsa` as a shortcut for `ls -lah`.
+Downloads `lsa` and installs it with executable permissions.
+
+**Oh My Zsh?** Replace its default `lsa='ls -lah'` alias with the `lsa` command:
+
+```sh
+printf '\nunalias lsa 2>/dev/null\n' >> ~/.zshrc && source ~/.zshrc
+```
 
 Needs bash 3.2 or later, grep, sed, awk, find, stat and ps. `lsa show` also
 needs `jq`, and the database-backed agents need `sqlite3`.
@@ -34,9 +38,13 @@ brew install jakemanger/tap/lsa
 Debian / Ubuntu:
 
 ```sh
-curl -fLO https://github.com/jakemanger/lsa/releases/latest/download/lsa.deb
-sudo apt install ./lsa.deb
+sudo mkdir -p /etc/apt/keyrings
+sudo curl -fsSL https://jakemanger.github.io/lsa/apt/lsa.asc -o /etc/apt/keyrings/lsa.asc
+sudo curl -fsSL https://jakemanger.github.io/lsa/apt/lsa.sources -o /etc/apt/sources.list.d/lsa.sources
+sudo apt update && sudo apt install lsa
 ```
+
+Add the repository once; subsequent updates come through `sudo apt upgrade`.
 
 Fedora / RHEL:
 
@@ -52,9 +60,9 @@ curl -fLO https://github.com/jakemanger/lsa/releases/latest/download/lsa.pkg.tar
 sudo pacman -U ./lsa.pkg.tar.zst
 ```
 
-Linux packages are release downloads, with dependencies installed by your
-package manager. Updates use the same commands. No extra package repository
-is required. The Homebrew tap supports `brew upgrade lsa`.
+The Homebrew tap supports `brew upgrade lsa`. RPM and Arch packages are
+release downloads; use the same commands to update them. All package managers
+install the required dependencies.
 
 ## Agents
 

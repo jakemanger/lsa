@@ -22,9 +22,9 @@ class Lsa < Formula
   end
 
   def caveats
-    <<~EOS
-      Oh My Zsh: run unalias lsa in your current terminal.
-      Add unalias lsa 2>/dev/null to the end of ~/.zshrc for new terminals.
+    <<~'EOS'
+      Oh My Zsh? Replace its default lsa='ls -lah' alias with the lsa command:
+      printf '\nunalias lsa 2>/dev/null\n' >> ~/.zshrc && source ~/.zshrc
     EOS
   end
 

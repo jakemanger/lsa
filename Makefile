@@ -1,6 +1,6 @@
 PREFIX ?= /usr/local
 
-.PHONY: test lint install uninstall packages check-packages smoke-linux deb rpm arch formula clean
+.PHONY: test lint install uninstall packages check-packages smoke-linux deb rpm arch formula apt-repo check-apt smoke-apt clean
 
 test:
 	bash test.sh
@@ -34,6 +34,15 @@ smoke-linux:
 
 formula:
 	bash packaging/formula.sh > Formula/lsa.rb
+
+apt-repo:
+	bash packaging/build-apt.sh
+
+check-apt:
+	python3 packaging/check-apt.py
+
+smoke-apt:
+	bash packaging/smoke-apt.sh
 
 clean:
 	rm -rf dist

@@ -1,0 +1,4 @@
+Types: deb
+URIs: https://jakemanger.github.io/lsa/apt/
+Suites: ./
+Signed-By: /etc/apt/keyrings/lsa.asc

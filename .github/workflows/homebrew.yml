@@ -23,6 +23,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           test "$(gh repo view --json isPrivate --jq .isPrivate)" = false
+          test "$(gh repo view jakemanger/homebrew-tap --json isPrivate --jq .isPrivate)" = false
           test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = false
           gh release download "$RELEASE_TAG" --dir assets \
             --pattern lsa --pattern lsa.rb --pattern SHA256SUMS
@@ -35,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: jakemanger/homebrew-tap
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          ssh-key: ${{ secrets.HOMEBREW_TAP_SSH_KEY }}
           path: tap
       - name: Update the tap locally
         env:

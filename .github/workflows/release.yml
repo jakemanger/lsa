@@ -44,10 +44,23 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag }}
-      - run: sudo apt-get update && sudo apt-get install -y libarchive-tools jq sqlite3
+      - run: sudo apt-get update && sudo apt-get install -y gnupg libarchive-tools jq sqlite3
       - run: bash packaging/install-nfpm.sh
       - run: NFPM="$PWD/.tools/nfpm" make packages check-packages
       - run: make smoke-linux
+      - name: Check the signed apt repository before creating a draft
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+        run: |
+          export GNUPGHOME
+          GNUPGHOME=$(mktemp -d)
+          trap 'gpgconf --kill all; rm -rf "$GNUPGHOME"' EXIT
+          printf '%s' "$APT_SIGNING_KEY" | gpg --batch --import
+          export APT_SIGNING_KEY_ID
+          APT_SIGNING_KEY_ID=$(gpg --batch --show-keys --with-colons packaging/lsa-archive-keyring.asc | awk -F: '$1 == "fpr" { print $10; exit }')
+          mkdir -p dist/apt-input
+          cp dist/lsa.deb dist/apt-input/
+          make apt-repo check-apt smoke-apt
       - name: Upload draft release for review
         env:
           GH_TOKEN: ${{ github.token }}
