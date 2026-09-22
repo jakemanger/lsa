@@ -15,12 +15,13 @@ mkdir -p "$P/wren" "$P/lantern" "$P/tidepool" "$P/quill"
 # age in seconds -> touch -t stamp (portable to BSD and GNU touch)
 stamp() { date -r $(( $(date +%s) - $1 )) +%Y%m%d%H%M.%S 2>/dev/null || date -d "@$(( $(date +%s) - $1 ))" +%Y%m%d%H%M.%S; }
 age() { touch -t "$(stamp "$2")" "$1"; }
+iso() { TZ=UTC date -r $(( $(date +%s) - $1 )) +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null || TZ=UTC date -u -d "@$(( $(date +%s) - $1 ))" +%Y-%m-%dT%H:%M:%S.000Z; }
 ago_ms() { echo $(( ($(date +%s) - $1) * 1000 )); }
 
 claude() { # id cwd age prompt
   local d="$H/.claude/projects/$(printf '%s' "$2" | sed 's/[^A-Za-z0-9]/-/g')"
   mkdir -p "$d"
-  printf '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"%s"}]},"cwd":"%s","sessionId":"%s"}\n' "$4" "$2" "$1" > "$d/$1.jsonl"
+  printf '{"type":"user","timestamp":"%s","message":{"role":"user","content":[{"type":"text","text":"%s"}]},"cwd":"%s","sessionId":"%s"}\n' "$(iso "$3")" "$4" "$2" "$1" > "$d/$1.jsonl"
   printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"On it. Let me look at the code first."},{"type":"tool_use","name":"Read","input":{"file_path":"src/app.ts"}}]},"cwd":"%s"}\n' "$2" >> "$d/$1.jsonl"
   printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done: two files changed, tests pass."}]},"cwd":"%s"}\n' "$2" >> "$d/$1.jsonl"
   age "$d/$1.jsonl" "$3"
