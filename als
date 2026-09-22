@@ -13,17 +13,20 @@ als - ls for agent sessions
 usage: als [options] [dir]          list sessions started in dir (default: .)
        als show <id>                print a transcript as plain text
        als path <id>                print the transcript's file path
-       als resume <id>              reopen the session in its own agent
+       als fg <id>                  reopen the session in its own agent
+       als resume <id>              same as fg
 
 options:
   -a, --all           every directory, not just dir
   -t, --agent NAME    only claude, codex or pi (repeatable)
   -n, --limit N       show at most N sessions
-  -l, --long          add the full path and the resume command
+  -l, --long          show the command that resumes each session
+  -L, --paths         also show each transcript's path
   -h, --help          this text
   -V, --version       version
 
 <id> is any unique prefix of the session id shown in the listing.
+Think jobs and fg: als lists, als fg picks one up again.
 EOF
 }
 
@@ -141,7 +144,10 @@ list_rows() { # dir cols
         "$color" "$agent" "$C_RESET" "$when" "$C_DIM" "$id" "$C_RESET" "$((width+21))" "$title"
     fi
     if [ "$LONG" = 1 ]; then
-      printf '        %s%s\n        %s%s\n' "$C_DIM" "$f" "$(resume_cmd "$agent" "$id" "$f")" "$C_RESET"
+      printf '        %s$ %s%s\n' "$C_DIM" "$(resume_cmd "$agent" "$id" "$f")" "$C_RESET"
+    fi
+    if [ "$PATHS" = 1 ]; then
+      printf '        %s%s%s\n' "$C_DIM" "$f" "$C_RESET"
     fi
     shown=$((shown+1))
     [ "$LIMIT" -gt 0 ] && [ "$shown" -ge "$LIMIT" ] && break
@@ -220,6 +226,7 @@ cmd_show() {
 }
 
 cmd_path()   { local hit; hit=$(find_one "$1") || exit 1; printf '%s\n' "${hit##*	}"; }
+cmd_fg() { cmd_resume "$@"; }
 cmd_resume() {
   local agent id f
   IFS=$'\t' read -r agent id f < <(find_one "$1")
@@ -227,14 +234,15 @@ cmd_resume() {
 }
 
 # ---------- args ----------
-ALL=0 LONG=0 LIMIT=0 AGENTS='' DIR=''
+ALL=0 LONG=0 PATHS=0 LIMIT=0 AGENTS='' DIR=''
 case ${1:-} in
-  show|path|resume) [ $# -ge 2 ] || { usage >&2; exit 2; }; "cmd_$1" "$2"; exit;;
+  show|path|fg|resume) [ $# -ge 2 ] || { usage >&2; exit 2; }; "cmd_$1" "$2"; exit;;
 esac
 while [ $# -gt 0 ]; do
   case $1 in
     -a|--all) ALL=1;;
     -l|--long) LONG=1;;
+    -L|--paths) PATHS=1;;
     -n|--limit) LIMIT=$2; shift;;
     -t|--agent) AGENTS="$AGENTS $2"; shift;;
     -h|--help) usage; exit 0;;

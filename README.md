@@ -45,11 +45,24 @@ als                 sessions started in this directory
 als -a              every session
 als ~/code/foo      sessions started in another directory
 als -t codex -n 5   the five newest Codex sessions
-als -l              add the file path and the resume command to each row
+als -l              show the command that resumes each session
+als -L              show each transcript's path
 
 als show 659c       print a transcript as plain text
 als path 659c       print where the transcript lives
-als resume 659c     reopen it in its own agent
+als fg 659c         reopen it in its own agent (resume is a synonym)
+```
+
+Think `jobs` and `fg`: `als` lists what you left, `als fg` picks one up
+again. With `-l` each row carries the agent's own command, so you can
+paste it instead:
+
+```
+$ als -l -n 2
+claude  22h ago  shotglass  b0b493c9  ok, i've had some really good posts…
+        $ claude --resume b0b493c9-1f3d-4e1e-9d3f-2b7c8a0f1e21
+codex   21h ago  howtoconvert  01a0b932  can you create a new update…
+        $ codex resume 01a0b932-3e57-7401-949a-66354671f006
 ```
 
 An id is any unique prefix of the one in the listing. `show` works well
