@@ -36,14 +36,14 @@ Needs bash 3.2 or later, grep, sed, awk and stat. `als show` also needs `jq`.
 
 | Agent | | List | Show | Resume | Status |
 |---|---|:-:|:-:|:-:|---|
-| Claude Code | ✳ | ✓ | ✓ | `claude --resume` | ✓ tested on real sessions |
-| Codex | ⌘ | ✓ | ✓ | `codex resume` | ✓ tested on real sessions |
-| pi | π | ✓ | ✓ | `pi --session` | ✓ tested on real sessions |
-| Gemini CLI | ✦ | ✓ | ✓ | `gemini --resume` | ○ from the documented format |
-| Qwen Code | ❯ | ✓ | ✓ | `qwen --resume` | ○ from the documented format |
-| OpenCode | ◐ | ✓ | | `opencode --session` | ○ from the documented format |
-| Goose | 🪿 | ✓ | ✓ | `goose session --resume` | ○ from the documented format |
-| Cline | ⌬ | ✓ | ✓ | in VS Code | ○ from the documented format |
+| Claude Code | ✳ | ✓ | ✓ | ✓ | ✓ tested on real sessions |
+| Codex | ⌘ | ✓ | ✓ | ✓ | ✓ tested on real sessions |
+| pi | π | ✓ | ✓ | ✓ | ✓ tested on real sessions |
+| Gemini CLI | ✦ | ✓ | ✓ | ✓ | ○ from the documented format |
+| Qwen Code | ❯ | ✓ | ✓ | ✓ | ○ from the documented format |
+| OpenCode | ◐ | ✓ | – | ✓ | ○ from the documented format |
+| Goose | 🪿 | ✓ | ✓ | ✓ | ○ from the documented format |
+| Cline | ⌬ | ✓ | ✓ | – | ○ from the documented format |
 
 ✓ means I ran it against my own transcripts. ○ means the reader was written
 from the agent's documented file layout and passes the fixture tests, but I
