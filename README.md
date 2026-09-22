@@ -83,6 +83,9 @@ als show 659c | grep -n 'TODO'
 | Codex       | `~/.codex/sessions/YYYY/MM/DD/*.jsonl` | `CODEX_HOME`            |
 | pi          | `~/.pi/agent/sessions/*/*.jsonl`       | `PI_CODING_AGENT_DIR`   |
 
+Claude Code's sub-agent files and Codex Desktop's internal reviewer threads
+(`guardian_review`) are skipped: they are not sessions you can resume.
+
 A session's directory and first prompt never change, so they are cached
 in `~/.cache/als/` after the first run. Listing is then a directory scan,
 about the cost of `ls -l` on the same files. Delete the cache directory

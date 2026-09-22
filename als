@@ -66,7 +66,7 @@ ago() { # seconds since epoch -> sets AGO to "3m ago" (no subshell: called per r
 # sessions cost the same as tiny ones. A session with no prompt yet is only
 # cached once it is ten minutes old, so a session being typed into stays fresh.
 parse() {
-  awk -F '\t' -v now="$NOW" '
+  awk -F '\t' -v now="$NOW" -v HIDDEN="$HIDDEN" '
     # JSON string starting right after the opening quote; unescapes; capped
     function jstr(s,   out) {
       match(s, /^([^"\\]|\\.)*/); out = substr(s, 1, RLENGTH)
@@ -79,6 +79,8 @@ parse() {
     { agent = $1; f = $2; cwd = ""; title = ""; n = 0; cont = 0
       while ((getline line < f) > 0) {
         if (++n > 60) break   # the prompt is in the first dozen records of every format
+        # Codex Desktop keeps its internal reviewer threads next to real sessions; not yours to resume
+        if (n == 1 && index(line, "\"thread_source\":\"guardian_review\"")) { title = HIDDEN; break }
         if (cwd == "" && (i = index(line, "\"cwd\":\""))) cwd = jstr(substr(line, i + 7, 2000))
         if (title == "") {
           if (agent == "claude") { if (index(line, "\"type\":\"user\"")) title = text_of(line) }
@@ -91,6 +93,8 @@ parse() {
       if (title == "" && cont) title = "(continued after compaction)"
       if (title != "" || now - $3 > 600) { gsub(/\t/, " ", title); print f "\t" cwd "\t" title } }'
 }
+
+HIDDEN='[als:hidden]'   # title sentinel for files that are not sessions
 
 # ---------- the cache: path -> cwd, title. Immutable facts, so never invalidated ----------
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/als"
@@ -107,6 +111,11 @@ enrich() {
   printf '%s\n' "$rows" | awk -F '\t' -v OFS='\t' -v c="$CACHE" '
     FILENAME == c { cwd[$1] = $2; title[$1] = $3; next }
     { print $0, ($3 in cwd ? cwd[$3] : ""), ($3 in title ? title[$3] : "") }' "$CACHE" -
+}
+
+# every session, newest first: "mtime agent path id shortlen cwd title"
+sessions() {
+  find_all | sort -rn | enrich | awk -F '\t' -v h="$HIDDEN" '$7 != h'
 }
 
 # ---------- find every transcript: "mtime<TAB>agent<TAB>path<TAB>id<TAB>shortlen" ----------
@@ -148,7 +157,7 @@ resume_cmd() { # agent id file
 # ---------- list ----------
 list_rows() { # dir cols
   local dir=$1 cols=$2 shown=0 i=-1 width ts agent f cwd id short n title color when proj
-  find_all | sort -rn | enrich | while IFS=$'\t' read -r ts agent f id n cwd title; do
+  sessions | while IFS=$'\t' read -r ts agent f id n cwd title; do
     i=$((i+1))
     want_agent "$agent" || continue
     short=${id:0:$n}
@@ -201,7 +210,7 @@ find_one() { # index-or-prefix
   local prefix=$1 hits n ts agent f id
   case $prefix in
     [0-9]|[0-9][0-9]|[0-9][0-9][0-9])   # an index: nth row of the newest-first list
-      hits=$(find_all | sort -rn | sed -n "$((prefix+1))p")
+      hits=$(sessions | sed -n "$((prefix+1))p")
       [ -n "$hits" ] || { echo "als: no session at index $prefix" >&2; return 1; }
       IFS=$'\t' read -r ts agent f id n <<< "$hits"
       printf '%s\t%s\t%s\n' "$agent" "$id" "$f"; return 0;;

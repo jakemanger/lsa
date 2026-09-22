@@ -30,6 +30,11 @@ cat > "$tmp/.pi/agent/sessions/x/2026-09-22T09-00-00-000Z_cccc3333-0000-0000-000
 {"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}
 EOF
 
+cat > "$tmp/.codex/sessions/2026/09/22/rollout-2026-09-22T11-00-00-dddd4444-0000-0000-0000-000000000000.jsonl" <<EOF
+{"type":"session_meta","payload":{"session_id":"dddd4444-0000-0000-0000-000000000000","cwd":"$proj","thread_source":"guardian_review"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"REVIEWER"}]}}
+EOF
+
 fail=0
 check() { # name expected actual
   if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1"; echo "  want: $2"; echo "  got:  $3"; fail=1; fi
@@ -38,6 +43,9 @@ check() { # name expected actual
 out=$(cd "$proj" && bash "$ALS")
 check "cwd listing has claude and codex only" "claude codex" "$(printf '%s\n' "$out" | awk '{print $2}' | sort | tr '\n' ' ' | sed 's/ $//')"
 check "sidechain skipped" "" "$(printf '%s\n' "$out" | grep SIDECHAIN || true)"
+check "codex reviewer threads hidden" "" "$(bash "$ALS" -a | grep REVIEWER || true)"
+check "cache written" "1" "$([ -s "$tmp/.cache/als/index-$(bash "$ALS" -V | cut -d' ' -f2).tsv" ] && echo 1)"
+check "second run from cache matches" "$(bash "$ALS" -a)" "$(bash "$ALS" -a)"
 check "claude title unescaped" 'fix the "login" bug please' "$(printf '%s\n' "$out" | grep claude | sed 's/.*aaaa  *//')"
 check "codex skips injected prompts" "add subtitles" "$(printf '%s\n' "$out" | grep codex | sed 's/.*bbbb  *//')"
 
