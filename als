@@ -76,17 +76,19 @@ parse() {
       if ((i = index(line, "\"text\":\""))) return jstr(substr(line, i + 8, 2000))
       if ((i = index(line, "\"content\":\""))) return jstr(substr(line, i + 11, 2000))
       return "" }
-    { agent = $1; f = $2; cwd = ""; title = ""; n = 0; bytes = 0
+    { agent = $1; f = $2; cwd = ""; title = ""; n = 0; cont = 0
       while ((getline line < f) > 0) {
-        # the prompt is in the first dozen records of every format, before any tool output
-        if (++n > 60 || (bytes += length(line)) > 1048576) break
+        if (++n > 60) break   # the prompt is in the first dozen records of every format
         if (cwd == "" && (i = index(line, "\"cwd\":\""))) cwd = jstr(substr(line, i + 7, 2000))
         if (title == "") {
           if (agent == "claude") { if (index(line, "\"type\":\"user\"")) title = text_of(line) }
           else if (index(line, "\"role\":\"user\"")) { t = text_of(line)
-            if (agent != "codex" || t !~ /^(<|# AGENTS\.md)/) title = t } }
+            # Codex injects AGENTS.md, <environment_context> and, after compaction, history summaries
+            if (agent != "codex" || t !~ /^(<|# AGENTS\.md|The following is the Codex agent history)/) title = t }
+          if (agent == "codex" && index(line, "\"type\":\"compacted\"")) cont = 1 }
         if (cwd != "" && title != "") break }
       close(f)
+      if (title == "" && cont) title = "(continued after compaction)"
       if (title != "" || now - $3 > 600) { gsub(/\t/, " ", title); print f "\t" cwd "\t" title } }'
 }
 

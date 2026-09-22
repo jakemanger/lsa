@@ -83,7 +83,11 @@ als show 659c | grep -n 'TODO'
 | Codex       | `~/.codex/sessions/YYYY/MM/DD/*.jsonl` | `CODEX_HOME`            |
 | pi          | `~/.pi/agent/sessions/*/*.jsonl`       | `PI_CODING_AGENT_DIR`   |
 
-Nothing is written, nothing leaves the machine.
+A session's directory and first prompt never change, so they are cached
+in `~/.cache/als/` after the first run. Listing is then a directory scan,
+about the cost of `ls -l` on the same files. Delete the cache directory
+if you ever want a rescan. Nothing else is written, nothing leaves the
+machine.
 
 ## Adding an agent
 
