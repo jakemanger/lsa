@@ -5,7 +5,8 @@ ALS=$(cd "$(dirname "$0")/.." && pwd)/als
 export PATH="$(dirname "$ALS"):$PATH"
 export HOME=${DEMO_HOME:?}
 export XDG_CACHE_HOME="$HOME/.cache"
-export COLUMNS=118  # the recorder is headless, so tput cannot know the window size
+export COLUMNS=${DEMO_COLS:-100}   # the recorder is headless, so tput cannot know the window size
+export GOOSE_PROVIDER=ollama GOOSE_MODEL=${DEMO_MODEL:-qwen2.5:1.5b} GOOSE_TELEMETRY_ENABLED=false
 cd "$HOME/code/wren"
 
 PS="\033[1;32m❯\033[0m "
@@ -29,18 +30,29 @@ case ${1:-list} in
     run "als"
     say "every project, every agent, newest first"
     run "als -a" 3
-    say "just one agent"
-    run "als -a -t claude" 2.5
+    say "pick one up where you left it"
+    printf "$PS"; type_out "als resume 3"; sleep 0.6; printf '\n'
+    # drive the resumed Goose session: one follow-up, then leave
+    expect -c '
+      set timeout 90
+      spawn als resume 3
+      expect -re "goose is ready|resuming"
+      sleep 1.5
+      send "thanks, now make them shorter\r"
+      expect -re "\\( O\\)>|goose>|\\n\\(.*\\)\\s*$" { }
+      expect -timeout 60 -re "\\n.*\\n.*\\n"
+      sleep 4
+      send "/exit\r"
+      expect eof'
+    sleep 1.5
     ;;
   pick)
     say "0 is the newest. pick by index or by id, like git"
-    run "als -a -n 5" 2
+    run "als -a -n 6" 2
     run "als show 1 | head -12" 3
     run "als path 2"
     say "-l shows the command that reopens each one"
     run "als -a -l -n 3" 3
-    say "or just: als resume 1"
-    sleep 1.5
     ;;
 esac
 printf "$PS"; sleep 1.5

@@ -13,7 +13,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get install -y shellcheck jq
+      - run: sudo apt-get install -y shellcheck jq sqlite3
         if: runner.os == 'Linux'
       - run: brew install shellcheck jq
         if: runner.os == 'macOS'
