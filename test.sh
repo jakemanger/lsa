@@ -24,7 +24,7 @@ cat > "$tmp/.codex/sessions/2026/09/22/rollout-2026-09-22T10-00-00-bbbb2222-0000
 {"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<skills>"}]}}
 {"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions\nstuff"}]}}
 {"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>x</environment_context>"}]}}
-{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"add subtitles"}]}}
+{"timestamp":"2026-01-01T00:00:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"add subtitles"}]}}
 {"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done."}]}}
 EOF
 cat > "$tmp/.codex/sessions/2026/09/22/rollout-2026-09-22T11-00-00-dddd4444-0000-0000-0000-000000000000.jsonl" <<EOF
@@ -110,8 +110,8 @@ fail=0
 check() { # name expected actual
   if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1"; echo "  want: $2"; echo "  got:  $3"; fail=1; fi
 }
-title_of() { cut -c55-; }          # the title column in -a listings
-title_here() { cut -c34-; }        # the title column in a directory listing
+title_of() { cut -c54-; }          # the title column in -a listings
+title_here() { cut -c33-; }        # the title column in a directory listing
 agents_of() { awk '{print $2}' | sort | tr '\n' ' ' | sed 's/ $//'; }
 
 out=$(cd "$proj" && bash "$ALS")
@@ -151,7 +151,7 @@ fi
 
 all=$(bash "$ALS" -a)
 check "short ids are 4 chars when unique" "aaaa bbbb cccc" "$(bash "$ALS" -a -t claude -t codex -t pi | awk '{print $6}' | sort | tr '\n' ' ' | sed 's/ $//')"
-cp "$tmp/.claude/projects/x/aaaa1111-0000-0000-0000-000000000000.jsonl" "$tmp/.claude/projects/x/aaaa1199-0000-0000-0000-000000000000.jsonl"
+cp -p "$tmp/.claude/projects/x/aaaa1111-0000-0000-0000-000000000000.jsonl" "$tmp/.claude/projects/x/aaaa1199-0000-0000-0000-000000000000.jsonl"   # -p: keep it old, or a real claude on this machine makes it busy
 check "short ids grow until unique" "aaaa111 aaaa119" "$(bash "$ALS" -a -t claude | awk '{print $6}' | sort | tr '\n' ' ' | sed 's/ $//')"
 check "short id resolves" "$tmp/.claude/projects/x/aaaa1199-0000-0000-0000-000000000000.jsonl" "$(bash "$ALS" path aaaa1199)"
 rm "$tmp/.claude/projects/x/aaaa1199-0000-0000-0000-000000000000.jsonl"
@@ -165,7 +165,9 @@ check "index 0 is the newest" "$tmp/.pi/agent/sessions/x/2026-09-22T09-00-00-000
 check "listing indexes are contiguous" "$(seq 0 $(( $(printf '%s\n' "$all" | grep -c .) - 1 )) | tr '\n' ' ' | sed 's/ $//')" "$(bash "$ALS" -a | awk '{print $1}' | tr '\n' ' ' | sed 's/ $//')"
 ( exec -a codex sleep 30 ) & fake=$!   # a process named codex, so the codex session counts as working
 touch "$tmp/.codex/sessions/2026/09/22/rollout-2026-09-22T10-00-00-bbbb2222-0000-0000-0000-000000000000.jsonl"
-check "a fresh session with a live agent is working" "● working" "$(bash "$ALS" -a -t codex | awk '{print $3, $4}')"
+check "a fresh session with a live agent is busy, no colour marker" "▶" "$(bash "$ALS" -a -t codex | awk '{print $3}')"
+check "busy shows how long the turn has run, from the last prompt" "1" "$(bash "$ALS" -a -t codex | awk '{print $4}' | grep -cE '^[0-9]+(s|m|h[0-9]+m|h)$')"
+check "busy duration counts from that prompt, not the file" "1" "$(bash "$ALS" -a -t codex | awk '{print $4}' | grep -cE '^[0-9]+h$')"
 check "a fresh session without a live agent is not" "0s ago" "$(touch "$tmp/.qwen/projects/x/chats/eeee5555-0000-0000-0000-000000000000.jsonl"; bash "$ALS" -a -t qwen | awk '{print $3, $4}')"
 kill $fake 2>/dev/null; wait $fake 2>/dev/null || true
 check "gone once the agent exits" "ago" "$(bash "$ALS" -a -t codex | awk '{print $4}')"

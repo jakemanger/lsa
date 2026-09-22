@@ -85,9 +85,17 @@ als resume 0        the same by index, like tmux attach -t 0
 ![als picking a session](demo/pick.gif)
 
 A session whose transcript changed in the last two minutes, and whose agent
-has a live process, shows `● working` instead of its age. That is the
-whole detection: an agent writes to its transcript while it works and stops
-when it is waiting on you, so an open but idle session is not marked.
+has a live process, shows a green `●` and how long the current turn has been
+running, counted from the last prompt you typed, in place of its age:
+
+```
+  0 claude   ● 2m      3e1f    add a --dry-run flag to the deploy script
+  1 codex    15m ago   01a0c7d the flaky test in api/test_auth.py
+```
+
+That is the whole detection: an agent writes to its transcript while it
+works and stops when it is waiting on you, so an open but idle session is
+not marked. With colour off the marker is `▶`.
 
 A session is named by its index or its id. Index 0 is the newest session
 on the machine and the numbers are global, so `als resume 3` is the same

@@ -59,8 +59,8 @@ color_of() { # agent -> sets COLOR
   esac
   [ "$USE_COLOR" = 1 ] || COLOR=''
 }
-if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then USE_COLOR=1 C_DIM=$'\033[2m' C_WORK=$'\033[32m' C_RESET=$'\033[0m'
-else USE_COLOR=0 C_DIM='' C_WORK='' C_RESET=''; fi
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then USE_COLOR=1 C_DIM=$'\033[2m' C_WORK=$'\033[32m' C_RESET=$'\033[0m' MARK='●'
+else USE_COLOR=0 C_DIM='' C_WORK='' C_RESET='' MARK='▶'; fi   # a plain bullet says nothing without its colour
 
 resume_cmd() { # agent id file cwd -> sets RESUME ("" when the agent has no resume command)
   case $1 in
@@ -255,7 +255,8 @@ want_agent() { # agent
 
 # ---------- which agents have a live process right now ----------
 # A transcript is written to while its agent works, so a session touched in
-# the last two minutes whose agent is running is shown as working. One ps
+# the last two minutes whose agent is running is shown as busy, with how long
+# the current turn has run in place of the age. One ps
 # call, only made when some session is that fresh.
 WORKING_WINDOW=120
 running_agents() {
@@ -268,9 +269,55 @@ running_agents() {
     END { for (a in seen) printf "%s ", a }'
 }
 
+# ---------- how long the current turn has been running ----------
+# The timestamp of the last prompt you typed, from the tail of the transcript
+# (or one query for the database agents). Only asked for sessions already
+# known to be working, so a handful of reads at most. Prints epoch seconds,
+# or nothing when the format has no usable timestamp.
+since_ts() { # agent path id
+  local agent=$1 f=$2 id=$3 pat q
+  case $agent in
+    claude)  pat='"type":"user"' ;;   # tool results are also type user; they carry tool_result, prompts carry text
+    codex)   pat='"role":"user"' ;;
+    pi)      pat='"role":"user"' ;;
+    qwen)    pat='"type":"user"' ;;
+    gemini)  pat='"type":"user"' ;;
+    goose)   sqlite3 -batch -readonly "$f" "select max(created_timestamp) from messages where session_id = '$id' and role = 'user'
+               and json_extract(content_json, '\$[0].text') not like '<turn-context>%'" 2>/dev/null; return;;
+    opencode) sqlite3 -batch -readonly "$f" "select max(json_extract(data, '\$.time.created')) / 1000 from message
+               where session_id = '$id' and json_extract(data, '\$.role') = 'user'" 2>/dev/null; return;;
+    openclaw) sqlite3 -batch -readonly "$f" "select max(created_at) / 1000 from transcript_events where session_id = '$id'
+               and json_extract(event_json, '\$.type') = 'message' and json_extract(event_json, '\$.message.role') = 'user'" 2>/dev/null; return;;
+    muse)    f=$(sqlite3 -batch -readonly "$f" "select session_log_path from sessions where session_id = '$id'" 2>/dev/null)
+             [ -f "$f" ] || return 0
+             tail -c 262144 "$f" | awk '/"kind":"started"/ && match($0, /"recorded_at":[0-9]+/) { t = substr($0, RSTART + 14, RLENGTH - 14) }
+               END { if (t != "") print int(t / 1000000) }'; return;;
+    *) return 0;;
+  esac
+  # last line matching pat that is a prompt (has a text part, is not a tool result), ISO timestamp -> epoch
+  tail -c 262144 "$f" | awk -v pat="$pat" '
+    function epoch(s,   y, m, d, H, M, S, a, yy, mm, days) {   # ISO-8601 UTC -> seconds, no mktime in BSD awk
+      y = substr(s, 1, 4) + 0; m = substr(s, 6, 2) + 0; d = substr(s, 9, 2) + 0
+      H = substr(s, 12, 2) + 0; M = substr(s, 15, 2) + 0; S = substr(s, 18, 2) + 0
+      yy = y - (m <= 2); a = int(yy / 400); mm = m + (m > 2 ? -3 : 9)
+      days = int((153 * mm + 2) / 5) + d - 1 + 365 * (yy - 400 * a) + int((yy - 400 * a) / 4) - int((yy - 400 * a) / 100) + 146097 * a - 719468
+      return days * 86400 + H * 3600 + M * 60 + S }
+    index($0, pat) && index($0, "\"text\"") && !index($0, "tool_result") && match($0, /"timestamp":"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z"/) {
+      t = substr($0, RSTART + 13, RLENGTH - 14) }
+    END { if (t != "") print epoch(t) }'
+}
+
+busy_for() { # seconds -> sets BUSY like "2m" (no "ago": it is how long, not how long since)
+  local d=$1
+  if   [ "$d" -lt 60 ];    then BUSY="${d}s"
+  elif [ "$d" -lt 3600 ];  then BUSY="$((d/60))m"
+  elif [ "$d" -lt 36000 ]; then BUSY="$((d/3600))h$(( (d%3600)/60 ))m"
+  else BUSY="$((d/3600))h"; fi
+}
+
 # ---------- list ----------
 list_rows() { # dir cols
-  local dir=$1 cols=$2 shown=0 i=-1 width ts agent f cwd id short n title when proj rows running=''
+  local dir=$1 cols=$2 shown=0 i=-1 width ts agent f cwd id short n title when proj rows running='' since
   rows=$(sessions)
   [ -n "$rows" ] || return 0
   [ $(( NOW - ${rows%%	*} )) -lt "$WORKING_WINDOW" ] && running=$(running_agents)
@@ -284,12 +331,16 @@ list_rows() { # dir cols
     color_of "$agent"
     ago "$ts"; when=$AGO
     case " $running " in *" $agent "*)
-      [ $(( NOW - ts )) -lt "$WORKING_WINDOW" ] && when="${C_WORK}● working${C_RESET}";;
+      if [ $(( NOW - ts )) -lt "$WORKING_WINDOW" ]; then
+        since=$(since_ts "$agent" "$f" "$id"); BUSY=''
+        [ -n "$since" ] && [ "$since" -le "$NOW" ] 2>/dev/null && busy_for $(( NOW - since ))
+        when="${C_WORK}${MARK} ${BUSY}${C_RESET}"; when="$when$(printf '%*s' $(( 8 - 2 - ${#BUSY} )) '')"
+      fi;;
     esac
     proj=${cwd##*/}; [ -n "$proj" ] || proj='?'
-    width=$(( cols - 4 - 9 - 10 - 22 - 10 - 4 ))
+    width=$(( cols - 4 - 9 - 9 - 22 - 10 - 4 ))
     [ "$width" -lt 20 ] && width=20
-    case $when in *working*) ;; *) when=$(printf '%-9s' "$when");; esac   # "● working" is already 9 columns wide
+    case $when in *"$MARK"*) ;; *) when=$(printf '%-8s' "$when");; esac   # the busy marker is padded to 8 already
     if [ "$ALL" = 1 ]; then
       printf '%3d %s%-8s%s %s %-20.20s %s%-9s%s %.*s\n' \
         "$i" "$COLOR" "$agent" "$C_RESET" "$when" "$proj" "$C_DIM" "$short" "$C_RESET" "$width" "$title"
