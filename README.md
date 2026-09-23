@@ -1,4 +1,4 @@
-<h1><img src="assets/logo.png" alt="" height="96" align="left"> lsa</h1>
+<h1><img src="assets/logo.png" alt="" height="80" align="left"> lsa</h1>
 <br clear="all">
 
 `ls` for agent sessions. List every session from every coding agent on the
