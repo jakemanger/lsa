@@ -97,9 +97,9 @@ key instead.
 ## Why a list
 
 Tools like herdr and Claude Squad run the agents for you, a pane each, with a
-live view of which one is blocked. `lsa` assumes they have already run. It
-reads the transcripts they leave behind so you can get back into one, and
-nothing of it stays running afterwards.
+live view of which one is blocked. `lsa` runs nothing of its own. It reads the
+transcripts the agents leave behind, so a session is there whether it finished
+an hour ago or is still going in a pane.
 
 If all you wanted from a session manager was to find the conversation you were
 in and pick it up again, this is one that is one more letter than `ls`.
