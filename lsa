@@ -268,6 +268,25 @@ running_agents() {
     END { for (a in seen) printf "%s ", a }'
 }
 
+# ---------- the pane a session is already open in ----------
+# A session lsa resumed carries its id in the agent's command line, so the
+# pane it is running in can be found by walking each agent process up to the
+# pane it belongs to. Two commands, only run when resuming. Nothing is
+# started here; a session that is not open in tmux is simply not found.
+tmux_target() { # id -> prints session:window.pane, or nothing
+  command -v tmux >/dev/null 2>&1 || return 0
+  { tmux list-panes -a -F $'P\t#{pane_pid}\t#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null || return 0
+    ps -axo pid=,ppid=,command= 2>/dev/null; } | awk -F'\t' -v id="$1" '
+    $1 == "P" { pane[$2] = $3; next }
+    { n = split($0, f, " ")
+      for (i = 1; i <= n; i++) if (f[i] != "") { pid = f[i]; break }
+      for (j = i + 1; j <= n; j++) if (f[j] != "") { ppid = f[j]; break }
+      parent[pid] = ppid
+      if (index($0, id)) holder[pid] = 1 }
+    END { for (p in holder) { q = p
+            while (q != "" && q != "1") { if (q in pane) { print pane[q]; exit } q = parent[q] } } }'
+}
+
 # ---------- how long the current turn has been running ----------
 # The timestamp of the last prompt you typed, from the tail of the transcript
 # (or one query for the database agents). Only asked for sessions already
@@ -486,6 +505,16 @@ cmd_resume() {
   [ "$cwd" = - ] && cwd=''
   resume_cmd "$agent" "$id" "$f" "$cwd"
   [ -n "$RESUME" ] || { echo "lsa: $agent has no resume command; the session is at" >&2; echo "$f" >&2; exit 1; }
+  # already open in a tmux pane: go back to it rather than start a second
+  # agent on the same transcript
+  local target
+  target=$(tmux_target "$id")
+  if [ -n "$target" ]; then
+    tmux select-window -t "$target" 2>/dev/null || :
+    tmux select-pane -t "$target" 2>/dev/null || :
+    [ -n "${TMUX:-}" ] && exec tmux switch-client -t "$target"
+    exec tmux attach-session -t "${target%%:*}"
+  fi
   # most agents only find a session from the directory it was started in
   [ -d "$cwd" ] && cd "$cwd"
   # shellcheck disable=SC2086

@@ -103,6 +103,17 @@ nothing of it stays running afterwards.
 If all you wanted from a session manager was to find the conversation you were
 in and pick it up again, this is one that is one more letter than `ls`.
 
+**Already use tmux?** Then `lsa resume 0` attaches to the pane the session is
+already running in, rather than starting a second agent on the same transcript,
+and `ctrl-b d` leaves it running in the background. Want to check on it? Run
+`lsa` to see whether it is still working, or `lsa show 0` to read what it has
+done since. That is the part of an agent multiplexer like herdr, Claude Squad
+or cmux that most people actually want, and tmux already does it.
+
+lsa finds the pane by the session id on the agent's command line, so it finds
+any session it opened itself. Without tmux, or without a pane to find, resume
+behaves as it always has.
+
 ## Use
 
 ```

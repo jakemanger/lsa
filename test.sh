@@ -223,6 +223,18 @@ chmod +x "$tmp/bin/agent"
 for agent in claude codex pi gemini qwen cline opencode goose muse openclaw; do
   cp "$tmp/bin/agent" "$tmp/bin/$agent"
 done
+# tmux is asked whether the session is already open, so stub it here too and
+# keep the pane list empty until the attach tests below.
+export LSA_TEST_PANES="$tmp/panes"
+: > "$LSA_TEST_PANES"
+cat > "$tmp/bin/tmux" <<'EOF'
+#!/usr/bin/env bash
+case $1 in
+  list-panes) cat "$LSA_TEST_PANES" ;;
+  *) printf 'tmux %s\n' "$*" ;;
+esac
+EOF
+chmod +x "$tmp/bin/tmux"
 resume_output() { PATH="$tmp/bin:$PATH" bash "$LSA" resume "$1"; }
 check "resume claude" "$proj"$'\nclaude\n--resume\naaaa1111-0000-0000-0000-000000000000' "$(resume_output aaaa)"
 check "resume codex" "$proj"$'\ncodex\nresume\nbbbb2222-0000-0000-0000-000000000000' "$(resume_output bbbb)"
@@ -236,6 +248,20 @@ if [ $have_sqlite = 1 ]; then
   check "resume muse" "$proj"$'\nmuse\nresume\nhhhh8888-0000-0000-0000-000000000000' "$(resume_output hhhh)"
   check "resume openclaw keeps current directory" "$PWD"$'\nopenclaw\ntui\n--session\nagent:main:main' "$(resume_output iiii)"
 fi
+
+# A session still open in a tmux pane is returned to, not started a second
+# time. The pane is found by walking the agent process up to the pane it
+# belongs to, so the id has to match, not just the agent or the directory.
+attach_output() { PATH="$tmp/bin:$tmp/process-bin:$PATH" bash "$LSA" resume "$1"; }
+printf 'P\t900\twork:1.0\n' > "$LSA_TEST_PANES"
+printf '900 1 -zsh\n901 900 claude --resume aaaa1111-0000-0000-0000-000000000000\n' > "$LSA_TEST_PROCESSES"
+check "resume attaches to the pane the session is open in" $'tmux select-window -t work:1.0\ntmux select-pane -t work:1.0\ntmux attach-session -t work' "$(attach_output aaaa)"
+check "inside tmux it switches the client instead of attaching" $'tmux select-window -t work:1.0\ntmux select-pane -t work:1.0\ntmux switch-client -t work:1.0' "$(TMUX=/tmp/fake,1,0 attach_output aaaa)"
+check "another session in the same pane tree is not mistaken for it" "$proj"$'\ncodex\nresume\nbbbb2222-0000-0000-0000-000000000000' "$(attach_output bbbb)"
+printf '901 1 claude --resume aaaa1111-0000-0000-0000-000000000000\n' > "$LSA_TEST_PROCESSES"
+check "an agent running outside tmux is resumed as before" "$proj"$'\nclaude\n--resume\naaaa1111-0000-0000-0000-000000000000' "$(attach_output aaaa)"
+: > "$LSA_TEST_PANES"
+: > "$LSA_TEST_PROCESSES"
 
 # Neither long-format path may be cut at spaces, quotes or terminal width.
 spaced="$tmp/session files"
