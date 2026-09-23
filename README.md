@@ -101,7 +101,7 @@ reads the transcripts they leave behind so you can get back into one, and
 nothing of it stays running afterwards.
 
 If all you wanted from a session manager was to find the conversation you were
-in and pick it up again, that is one letter more than `ls`.
+in and pick it up again, this is one that is one more letter than `ls`.
 
 ## Use
 
