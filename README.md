@@ -93,6 +93,16 @@ OpenClaw sessions
 are chats rather than projects, so their directory column shows the session
 key instead.
 
+## Why a list
+
+Tools like herdr and Claude Squad run the agents for you, a pane each, with a
+live view of which one is blocked. `lsa` assumes they have already run. It
+reads the transcripts they leave behind so you can get back into one, and
+nothing of it stays running afterwards.
+
+If all you wanted from a session manager was to find the conversation you were
+in and pick it up again, that is one letter more than `ls`.
+
 ## Use
 
 ```
