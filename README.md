@@ -111,7 +111,8 @@ and `ctrl-b d` leaves it running in the background. Want to check on it? Run
 done since.
 
 That is the part of an agent multiplexer like herdr, Claude Squad or cmux that
-most people actually want, and simple unix tools replace it.
+most people actually want. You can achieve the same thing with simple unix
+tools: `lsa` and tmux.
 
 ## Use
 
