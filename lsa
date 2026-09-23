@@ -269,52 +269,42 @@ running_agents() {
 }
 
 # ---------- the pane a session is already open in ----------
-# Asked only when resuming, and in the order that costs least: the pane lsa
-# stamped when it opened the session, then where the agent itself says it is
-# running, then the pane whose process tree holds the id on a command line.
-# Nothing is started here; a session that is not open in tmux is not found.
-
-# Claude Code keeps a file per live session naming the pane it runs in, so a
-# session started by hand is found the same as one lsa opened.
-claude_pane() { # id -> pane id, or nothing
-  local dir f
-  dir=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/sessions
-  for f in "$dir"/*.json; do
-    [ -f "$f" ] || continue
-    grep -q "\"sessionId\":\"$1\"" "$f" 2>/dev/null || continue
+# Every resume command carries the session id, so a session lsa opened is
+# found by looking for that id in the command lines under each pane. Two
+# agents also record where they are running, which finds sessions started by
+# hand as well: Claude Code names the pane in a file per live session, and
+# Codex holds its session lock open. Asked only when resuming. Nothing is
+# started here; a session that is not open in tmux is simply not found.
+agent_pane() { # id -> the pane an agent says it is in, or nothing
+  local f
+  for f in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/sessions/*.json; do
+    grep -qs "\"sessionId\":\"$1\"" "$f" || continue
     sed -n 's/.*"tmux":"[^"]*\(%[0-9][0-9]*\)".*/\1/p' "$f"
     return 0
   done
 }
 
+agent_pids() { # id -> pids holding the session open, one per line
+  lsof -t -- "${CODEX_HOME:-$HOME/.codex}/thread-writer-locks/$1.lock" 2>/dev/null
+}
+
 tmux_target() { # id -> pane id, or nothing
   command -v tmux >/dev/null 2>&1 || return 0
-  local panes found
-  panes=$(tmux list-panes -a -F $'#{@lsa_session}\t#{pane_id}\t#{pane_pid}' 2>/dev/null) || return 0
+  local panes pane pids
+  panes=$(tmux list-panes -a -F $'\t#{pane_id}\t#{pane_pid}' 2>/dev/null) || return 0
   [ -n "$panes" ] || return 0
 
-  # lsa stamps a pane with the id and the pid it hands to the agent, so a
-  # stamp left behind by an agent that has since exited is ignored.
-  found=$(printf '%s\n' "$panes" | awk -F'\t' -v id="$1" '
-    { n = split($1, s, " ") }
-    n == 2 && s[1] == id { print s[2] "\t" $2; exit }')
-  if [ -n "$found" ]; then
-    kill -0 "${found%%	*}" 2>/dev/null && { printf '%s\n' "${found#*	}"; return 0; }
-  fi
+  pane=$(agent_pane "$1")
+  case "$panes" in *"	$pane	"*) [ -n "$pane" ] && { printf '%s\n' "$pane"; return 0; };; esac
 
-  found=$(claude_pane "$1")
-  if [ -n "$found" ] && printf '%s\n' "$panes" | awk -F'\t' -v p="$found" '$2 == p { f = 1 } END { exit !f }'; then
-    printf '%s\n' "$found"
-    return 0
-  fi
-
-  { printf '%s\n' "$panes"; ps -axo pid=,ppid=,command= 2>/dev/null; } | awk -F'\t' -v id="$1" '
+  pids=$(agent_pids "$1" | tr '\n' ' ')
+  { printf '%s\n' "$panes"; ps -axo pid=,ppid=,command= 2>/dev/null; } | awk -F'\t' -v id="$1" -v pids=" $pids " '
     NF == 3 { pane[$3] = $2; next }
     { n = split($0, f, " ")
       for (i = 1; i <= n; i++) if (f[i] != "") { pid = f[i]; break }
       for (j = i + 1; j <= n; j++) if (f[j] != "") { ppid = f[j]; break }
       parent[pid] = ppid
-      if (index($0, id)) holder[pid] = 1 }
+      if (index($0, id) || index(pids, " " pid " ")) holder[pid] = 1 }
     END { for (p in holder) { q = p
             while (q != "" && q != "1") { if (q in pane) { print pane[q]; exit } q = parent[q] } } }'
 }
@@ -548,8 +538,6 @@ cmd_resume() {
     session=$(tmux display-message -p -t "$target" '#{session_name}' 2>/dev/null)
     exec tmux attach-session -t "$session"
   fi
-  # exec below keeps this pid, so the agent about to start can be found again
-  if [ -n "${TMUX:-}" ]; then tmux set -p @lsa_session "$id $$" 2>/dev/null || :; fi
   # most agents only find a session from the directory it was started in
   [ -d "$cwd" ] && cd "$cwd"
   # shellcheck disable=SC2086

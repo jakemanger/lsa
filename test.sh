@@ -255,30 +255,42 @@ fi
 # belongs to, so the id has to match, not just the agent or the directory.
 attach_output() { PATH="$tmp/bin:$tmp/process-bin:$PATH" bash "$LSA" resume "$1"; }
 attached=$'tmux select-window -t %0\ntmux select-pane -t %0\ntmux attach-session -t work'
+resumed_claude="$proj"$'\nclaude\n--resume\naaaa1111-0000-0000-0000-000000000000'
+# lsof stands in for the one on the codex lock: the fixture puts the pid in it
+cat > "$tmp/bin/lsof" <<'EOF'
+#!/usr/bin/env bash
+cat "${*: -1}" 2>/dev/null || :
+EOF
+chmod +x "$tmp/bin/lsof"
+
+# Every resume command carries the id, so one rule covers all ten agents.
 printf '\t%%0\t900\n' > "$LSA_TEST_PANES"
 printf '900 1 -zsh\n901 900 claude --resume aaaa1111-0000-0000-0000-000000000000\n' > "$LSA_TEST_PROCESSES"
 check "resume attaches to the pane the session is open in" "$attached" "$(attach_output aaaa)"
 check "inside tmux it switches the client instead of attaching" $'tmux select-window -t %0\ntmux select-pane -t %0\ntmux switch-client -t %0' "$(TMUX=/tmp/fake,1,0 attach_output aaaa)"
 check "another session in the same pane tree is not mistaken for it" "$proj"$'\ncodex\nresume\nbbbb2222-0000-0000-0000-000000000000' "$(attach_output bbbb)"
+printf '900 1 -zsh\n901 900 pi --session /x/2026_cccc3333-0000-0000-0000-000000000000.jsonl\n' > "$LSA_TEST_PROCESSES"
+check "an id inside a session path counts too" $'tmux select-window -t %0\ntmux select-pane -t %0\ntmux attach-session -t work' "$(attach_output cccc)"
 printf '901 1 claude --resume aaaa1111-0000-0000-0000-000000000000\n' > "$LSA_TEST_PROCESSES"
-check "an agent running outside tmux is resumed as before" "$proj"$'\nclaude\n--resume\naaaa1111-0000-0000-0000-000000000000' "$(attach_output aaaa)"
+check "an agent running outside tmux is resumed as before" "$resumed_claude" "$(attach_output aaaa)"
 
-# A pane lsa stamped is trusted only while the agent it started is alive.
+# Claude Code records the pane it runs in, so a session started by hand is
+# found without its id ever appearing on a command line.
 : > "$LSA_TEST_PROCESSES"
-printf 'aaaa1111-0000-0000-0000-000000000000 %s\t%%0\t900\n' "$$" > "$LSA_TEST_PANES"
-check "a stamped pane is attached to without asking ps" "$attached" "$(attach_output aaaa)"
-printf 'aaaa1111-0000-0000-0000-000000000000 999999\t%%0\t900\n' > "$LSA_TEST_PANES"
-check "a stamp left by an agent that has exited is ignored" "$proj"$'\nclaude\n--resume\naaaa1111-0000-0000-0000-000000000000' "$(attach_output aaaa)"
-
-# Claude Code records the pane it runs in, so a session started by hand and
-# never opened by lsa is found too.
 mkdir -p "$tmp/.claude/sessions"
-printf '{"pid":901,"sessionId":"aaaa1111-0000-0000-0000-000000000000","tmux":"work:@0.%%0","status":"idle"}\n' > "$tmp/.claude/sessions/901.json"
-printf '\t%%0\t900\n' > "$LSA_TEST_PANES"
+claude_record() { printf '{"pid":901,"sessionId":"aaaa1111-0000-0000-0000-000000000000","tmux":"work:@0.%s","status":"idle"}\n' "$1" > "$tmp/.claude/sessions/901.json"; }
+claude_record '%0'
 check "a session claude says is in a pane is attached to" "$attached" "$(attach_output aaaa)"
-printf '{"pid":901,"sessionId":"aaaa1111-0000-0000-0000-000000000000","tmux":"work:@9.%%9","status":"idle"}\n' > "$tmp/.claude/sessions/901.json"
-check "a pane claude names that no longer exists is not used" "$proj"$'\nclaude\n--resume\naaaa1111-0000-0000-0000-000000000000' "$(attach_output aaaa)"
+claude_record '%9'
+check "a pane claude names that no longer exists is not used" "$resumed_claude" "$(attach_output aaaa)"
 rm -rf "$tmp/.claude/sessions"
+
+# Codex holds its session lock open, so its hand-started sessions are found.
+mkdir -p "$tmp/.codex/thread-writer-locks"
+printf '901\n' > "$tmp/.codex/thread-writer-locks/bbbb2222-0000-0000-0000-000000000000.lock"
+printf '900 1 -zsh\n901 900 codex\n' > "$LSA_TEST_PROCESSES"
+check "a session codex holds the lock for is attached to" "$attached" "$(attach_output bbbb)"
+rm -rf "$tmp/.codex/thread-writer-locks"
 : > "$LSA_TEST_PANES"
 : > "$LSA_TEST_PROCESSES"
 
