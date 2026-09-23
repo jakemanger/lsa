@@ -107,12 +107,10 @@ in and pick it up again, this is one that is one more letter than `ls`.
 already running in, rather than starting a second agent on the same transcript,
 and `ctrl-b d` leaves it running in the background. Want to check on it? Run
 `lsa` to see whether it is still working, or `lsa show 0` to read what it has
-done since. That is the part of an agent multiplexer like herdr, Claude Squad
-or cmux that most people actually want, and tmux already does it.
+done since.
 
-lsa finds the pane by the session id on the agent's command line, so it finds
-any session it opened itself. Without tmux, or without a pane to find, resume
-behaves as it always has.
+That is the part of an agent multiplexer like herdr, Claude Squad or cmux that
+most people actually want, and simple unix tools replace it.
 
 ## Use
 
