@@ -231,6 +231,7 @@ cat > "$tmp/bin/tmux" <<'EOF'
 #!/usr/bin/env bash
 case $1 in
   list-panes) cat "$LSA_TEST_PANES" ;;
+  display-message) printf 'work\n' ;;
   *) printf 'tmux %s\n' "$*" ;;
 esac
 EOF
@@ -253,13 +254,31 @@ fi
 # time. The pane is found by walking the agent process up to the pane it
 # belongs to, so the id has to match, not just the agent or the directory.
 attach_output() { PATH="$tmp/bin:$tmp/process-bin:$PATH" bash "$LSA" resume "$1"; }
-printf 'P\t900\twork:1.0\n' > "$LSA_TEST_PANES"
+attached=$'tmux select-window -t %0\ntmux select-pane -t %0\ntmux attach-session -t work'
+printf '\t%%0\t900\n' > "$LSA_TEST_PANES"
 printf '900 1 -zsh\n901 900 claude --resume aaaa1111-0000-0000-0000-000000000000\n' > "$LSA_TEST_PROCESSES"
-check "resume attaches to the pane the session is open in" $'tmux select-window -t work:1.0\ntmux select-pane -t work:1.0\ntmux attach-session -t work' "$(attach_output aaaa)"
-check "inside tmux it switches the client instead of attaching" $'tmux select-window -t work:1.0\ntmux select-pane -t work:1.0\ntmux switch-client -t work:1.0' "$(TMUX=/tmp/fake,1,0 attach_output aaaa)"
+check "resume attaches to the pane the session is open in" "$attached" "$(attach_output aaaa)"
+check "inside tmux it switches the client instead of attaching" $'tmux select-window -t %0\ntmux select-pane -t %0\ntmux switch-client -t %0' "$(TMUX=/tmp/fake,1,0 attach_output aaaa)"
 check "another session in the same pane tree is not mistaken for it" "$proj"$'\ncodex\nresume\nbbbb2222-0000-0000-0000-000000000000' "$(attach_output bbbb)"
 printf '901 1 claude --resume aaaa1111-0000-0000-0000-000000000000\n' > "$LSA_TEST_PROCESSES"
 check "an agent running outside tmux is resumed as before" "$proj"$'\nclaude\n--resume\naaaa1111-0000-0000-0000-000000000000' "$(attach_output aaaa)"
+
+# A pane lsa stamped is trusted only while the agent it started is alive.
+: > "$LSA_TEST_PROCESSES"
+printf 'aaaa1111-0000-0000-0000-000000000000 %s\t%%0\t900\n' "$$" > "$LSA_TEST_PANES"
+check "a stamped pane is attached to without asking ps" "$attached" "$(attach_output aaaa)"
+printf 'aaaa1111-0000-0000-0000-000000000000 999999\t%%0\t900\n' > "$LSA_TEST_PANES"
+check "a stamp left by an agent that has exited is ignored" "$proj"$'\nclaude\n--resume\naaaa1111-0000-0000-0000-000000000000' "$(attach_output aaaa)"
+
+# Claude Code records the pane it runs in, so a session started by hand and
+# never opened by lsa is found too.
+mkdir -p "$tmp/.claude/sessions"
+printf '{"pid":901,"sessionId":"aaaa1111-0000-0000-0000-000000000000","tmux":"work:@0.%%0","status":"idle"}\n' > "$tmp/.claude/sessions/901.json"
+printf '\t%%0\t900\n' > "$LSA_TEST_PANES"
+check "a session claude says is in a pane is attached to" "$attached" "$(attach_output aaaa)"
+printf '{"pid":901,"sessionId":"aaaa1111-0000-0000-0000-000000000000","tmux":"work:@9.%%9","status":"idle"}\n' > "$tmp/.claude/sessions/901.json"
+check "a pane claude names that no longer exists is not used" "$proj"$'\nclaude\n--resume\naaaa1111-0000-0000-0000-000000000000' "$(attach_output aaaa)"
+rm -rf "$tmp/.claude/sessions"
 : > "$LSA_TEST_PANES"
 : > "$LSA_TEST_PROCESSES"
 
