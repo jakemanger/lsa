@@ -2,8 +2,8 @@
 <br clear="all">
 
 `ls` for agent sessions. List every session from every coding agent on the
-machine, newest first. Resume the conversation, print it or pipe it to another
-agent.
+machine, newest first. Resume the conversation, watch it work in the
+background, print it or pipe it to another agent.
 
 ![lsa listing sessions](demo/list.gif)
 
