@@ -1,0 +1,106 @@
+name: Check installs
+
+# Manual only. Installs lsa each way the README shows, from the live release and
+# package repositories, then runs the fixture tests against the installed copy.
+# Containers get only what the README assumes a machine already has (curl,
+# sudo) and a yes to the package managers' confirmation prompts.
+on: workflow_dispatch
+
+permissions:
+  contents: read
+
+jobs:
+  standalone:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y jq sqlite3
+        if: runner.os == 'Linux'
+      - run: brew install jq
+        if: runner.os == 'macOS'
+      - name: Install as the README shows
+        working-directory: ${{ runner.temp }}
+        run: curl -fLO https://github.com/jakemanger/lsa/releases/latest/download/lsa && sudo install lsa /usr/local/bin/
+      - run: test "$(command -v lsa)" = /usr/local/bin/lsa && lsa --version
+      - run: LSA_UNDER_TEST=/usr/local/bin/lsa bash test.sh
+      - name: Oh My Zsh alias fix from the README
+        if: runner.os == 'macOS'
+        run: |
+          printf "alias lsa='ls -lah'\n" > ~/.zshrc
+          printf '\nunalias lsa 2>/dev/null\n' >> ~/.zshrc
+          test "$(zsh -ic 'lsa --version' 2>/dev/null)" = "lsa 0.1.0"
+
+  homebrew:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo /home/linuxbrew/.linuxbrew/bin >> "$GITHUB_PATH"
+        if: runner.os == 'Linux'
+      - name: Install as the README shows
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+        run: brew install jakemanger/tap/lsa
+      - run: brew test jakemanger/tap/lsa
+      - run: LSA_UNDER_TEST="$(brew --prefix)/bin/lsa" bash test.sh
+
+  apt:
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['ubuntu:24.04', 'ubuntu:22.04', 'debian:stable']
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    steps:
+      - name: What the README assumes
+        run: |
+          apt-get update && apt-get install -y curl sudo ca-certificates
+          echo 'APT::Get::Assume-Yes "true";' > /etc/apt/apt.conf.d/90yes
+      - uses: actions/checkout@v4
+      - name: Install as the README shows
+        run: |
+          sudo mkdir -p /etc/apt/keyrings
+          sudo curl -fsSL https://jakemanger.github.io/lsa/apt/lsa.asc -o /etc/apt/keyrings/lsa.asc
+          sudo curl -fsSL https://jakemanger.github.io/lsa/apt/lsa.sources -o /etc/apt/sources.list.d/lsa.sources
+          sudo apt update && sudo apt install lsa
+      - run: test "$(command -v lsa)" = /usr/bin/lsa && lsa --version
+      - run: LSA_UNDER_TEST=/usr/bin/lsa bash test.sh
+
+  rpm:
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - name: What the README assumes
+        run: |
+          dnf install -y sudo
+          echo 'assumeyes=True' >> /etc/dnf/dnf.conf
+      - uses: actions/checkout@v4
+      - name: Install as the README shows
+        working-directory: /tmp
+        run: |
+          curl -fLO https://github.com/jakemanger/lsa/releases/latest/download/lsa.rpm
+          sudo dnf install ./lsa.rpm
+      - run: test "$(command -v lsa)" = /usr/bin/lsa && lsa --version
+      - run: LSA_UNDER_TEST=/usr/bin/lsa bash test.sh
+
+  arch:
+    runs-on: ubuntu-latest
+    container: archlinux:base
+    steps:
+      - name: What the README assumes
+        run: pacman -Syu --noconfirm sudo
+      - uses: actions/checkout@v4
+      - name: Install as the README shows
+        working-directory: /tmp
+        run: |
+          curl -fLO https://github.com/jakemanger/lsa/releases/latest/download/lsa.pkg.tar.zst
+          yes | sudo pacman -U ./lsa.pkg.tar.zst
+      - run: test "$(command -v lsa)" = /usr/bin/lsa && lsa --version
+      - run: LSA_UNDER_TEST=/usr/bin/lsa bash test.sh

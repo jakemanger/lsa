@@ -2,7 +2,7 @@
 # Fixture tests: a fake home with one session per agent, in each agent's
 # real on-disk format (copied from sessions the agents wrote themselves).
 set -eu
-cd "$(dirname "$0")"; LSA=$PWD/lsa
+cd "$(dirname "$0")"; LSA=${LSA_UNDER_TEST:-$PWD/lsa}   # LSA_UNDER_TEST: an installed copy to check
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 export HOME=$tmp NO_COLOR=1
 unset CLAUDE_CONFIG_DIR CODEX_HOME PI_CODING_AGENT_DIR XDG_CACHE_HOME XDG_DATA_HOME GEMINI_CLI_HOME
