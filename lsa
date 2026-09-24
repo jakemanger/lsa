@@ -291,14 +291,18 @@ tmux_target() { # id -> pane id, or nothing
   case "$panes" in *"	$pane	"*) [ -n "$pane" ] && { printf '%s\n' "$pane"; return 0; };; esac
 
   pids=$(agent_pids "$1" | tr '\n' ' ')
-  { printf '%s\n' "$panes"; ps -axo pid=,ppid=,command= 2>/dev/null; } | awk -F'\t' -v id="$1" -v pids=" $pids " '
+  # lsa and the awk below carry the id too; neither they nor another lsa is the session
+  { printf '%s\n' "$panes"; ps -axo pid=,ppid=,command= 2>/dev/null; } | awk -F'\t' -v id="$1" -v pids=" $pids " -v self="$$" '
+    function ours(p) { while (p != "" && p != "1") { if (p == self) return 1; p = parent[p] } return 0 }
     NF == 3 { pane[$3] = $2; next }
     { n = split($0, f, " ")
       for (i = 1; i <= n; i++) if (f[i] != "") { pid = f[i]; break }
       for (j = i + 1; j <= n; j++) if (f[j] != "") { ppid = f[j]; break }
       parent[pid] = ppid
+      cmd = $0; sub(/^ *[0-9]+ +[0-9]+ +/, "", cmd)
+      if (cmd ~ /(^|[ \/])lsa( |$)/) next
       if (index($0, id) || index(pids, " " pid " ")) holder[pid] = 1 }
-    END { for (p in holder) { q = p
+    END { for (p in holder) { if (ours(p)) continue; q = p
             while (q != "" && q != "1") { if (q in pane) { print pane[q]; exit } q = parent[q] } } }'
 }
 

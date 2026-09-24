@@ -233,6 +233,7 @@ export LSA_TEST_PROCESSES="$tmp/processes"
 cat > "$tmp/process-bin/ps" <<'EOF'
 #!/usr/bin/env bash
 cat "$LSA_TEST_PROCESSES"
+[ -z "${LSA_TEST_REAL_PS:-}" ] || /bin/ps "$@"
 EOF
 chmod +x "$tmp/process-bin/ps"
 printf 'codex\n' > "$LSA_TEST_PROCESSES"
@@ -404,6 +405,16 @@ printf '900 1 -zsh\n901 900 pi --session /x/2026_cccc3333-0000-0000-0000-0000000
 check "an id inside a session path counts too" $'tmux select-window -t %0\ntmux select-pane -t %0\ntmux attach-session -t work' "$(attach_output cccc)"
 printf '901 1 claude --resume aaaa1111-0000-0000-0000-000000000000\n' > "$LSA_TEST_PROCESSES"
 check "an agent running outside tmux is resumed as before" "$resumed_claude" "$(attach_output aaaa)"
+
+# Run from inside a pane, lsa itself and the awk it starts carry the session id;
+# with the real process list they must not count as the session being open there.
+printf '\t%%0\t%s\n' "$$" > "$LSA_TEST_PANES"
+printf '901 1 bash /usr/local/bin/lsa show aaaa1111-0000-0000-0000-000000000000\n' > "$LSA_TEST_PROCESSES"
+check "lsa run inside tmux does not mistake itself for the session" "$resumed_claude" "$(LSA_TEST_REAL_PS=1 attach_output aaaa1111-0000-0000-0000-000000000000)"
+printf '900 1 -zsh\n901 900 bash /usr/local/bin/lsa show aaaa1111-0000-0000-0000-000000000000\n' > "$LSA_TEST_PROCESSES"
+printf '\t%%0\t900\n' > "$LSA_TEST_PANES"
+check "another lsa showing the session is not the session" "$resumed_claude" "$(attach_output aaaa)"
+: > "$LSA_TEST_PROCESSES"
 
 # Claude Code records the pane it runs in, so a session started by hand is
 # found without its id ever appearing on a command line.

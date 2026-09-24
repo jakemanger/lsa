@@ -121,7 +121,7 @@ has done since.
 lsa                 sessions started in this directory
 lsa -a              every session
 lsa ~/code/foo      sessions started in another directory
-lsa -t codex -n 5   the five newest Codex sessions
+lsa -t codex -n 5   the five newest Codex sessions here
 lsa -l              add full directory and transcript path columns
 
 lsa show 659c       print a transcript as plain text
