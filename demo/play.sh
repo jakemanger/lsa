@@ -6,49 +6,76 @@ export LSA
 PATH="$(dirname "$LSA"):$PATH"
 export PATH
 : "${DEMO_HOME:?}"
-# Only fixture readers and Goose use the demo home. The handoff launches a
-# real Claude with its normal login and no tools.
-export DEMO_HOME DEMO_REAL_HOME=$HOME DEMO_CLAUDE
-DEMO_CLAUDE=$(command -v claude)
+# Only fixture readers and Goose use the demo home. The handoffs launch a real
+# Claude and Codex with their normal logins, so these wrappers move each
+# handed-off session into the real store while it runs.
+export DEMO_HOME DEMO_REAL_HOME=$HOME DEMO_CLAUDE DEMO_CODEX
+DEMO_CLAUDE=$(command -v claude) DEMO_CODEX=$(command -v codex)
 mkdir -p "$DEMO_HOME/bin"
 cat > "$DEMO_HOME/bin/claude" <<'SH'
 #!/usr/bin/env bash
-# lsa wrote the handed-off session into the demo home; claude reads the real one
+# claude reads the real store; move the session there, then back so lsa can hand it on
+demo=''
 if [ "${1:-}" = --resume ]; then
-  for f in "$DEMO_HOME"/.claude/projects/*/"$2".jsonl; do
-    [ -f "$f" ] || continue
-    d="$DEMO_REAL_HOME/.claude/projects/$(basename "$(dirname "$f")")"
-    mkdir -p "$d" && mv "$f" "$d/"
+  for demo in "$DEMO_HOME"/.claude/projects/*/"$2".jsonl; do
+    real="$DEMO_REAL_HOME/.claude/projects/$(basename "$(dirname "$demo")")/$2.jsonl"
+    mkdir -p "${real%/*}" && mv "$demo" "$real"
+  done
+fi
+HOME=$DEMO_REAL_HOME XDG_CACHE_HOME='' "$DEMO_CLAUDE" --setting-sources "" --strict-mcp-config --tools "" \
+  --model sonnet --effort low --permission-mode manual "$@"
+status=$?
+[ -z "$demo" ] || mv "$real" "$demo"
+exit $status
+SH
+cat > "$DEMO_HOME/bin/codex" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = resume ]; then
+  for demo in "$DEMO_HOME"/.codex/sessions/*/*/*/rollout-*-"$2".jsonl; do
+    real="$DEMO_REAL_HOME/.codex/${demo#"$DEMO_HOME"/.codex/}"
+    mkdir -p "${real%/*}" && mv "$demo" "$real"
   done
 fi
 export HOME=$DEMO_REAL_HOME
-unset XDG_CACHE_HOME
-exec "$DEMO_CLAUDE" --setting-sources "" --strict-mcp-config --tools "" --model sonnet --effort low --permission-mode manual "$@"
+unset XDG_CACHE_HOME CODEX_HOME
+# typed demo input arrives fast enough to look like a paste, which turns Enter into a newline
+exec "$DEMO_CODEX" "$@" -c disable_paste_burst=true
 SH
-chmod +x "$DEMO_HOME/bin/claude"
+chmod +x "$DEMO_HOME/bin/claude" "$DEMO_HOME/bin/codex"
 PATH="$DEMO_HOME/bin:$PATH"
 export PATH
 lsa() { env HOME="$DEMO_HOME" XDG_CACHE_HOME="$DEMO_HOME/.cache" "$LSA" "$@"; }
 export -f lsa
-export COLUMNS=${DEMO_COLS:-100}   # the recorder is headless, so tput cannot know the window size
+export COLUMNS=${DEMO_COLS:-88}   # the recorder is headless, so tput cannot know the window size
 export GOOSE_PROVIDER=ollama GOOSE_MODEL=${DEMO_MODEL:-qwen2.5:3b} GOOSE_TELEMETRY_ENABLED=false
 cd "$DEMO_HOME/code/wren"
 
 PS="\033[1;32m❯\033[0m "
-say() { # a dim comment line, typed
-  printf '\033[2m# '; type_out "$1"; printf '\033[0m\n'; sleep 0.9
+# like a shell: the prompt appears as soon as the last command finishes, and each
+# line is typed after it
+say() { # a dim comment, typed at the prompt
+  printf '\033[2m# '; type_out "$1"; printf '\033[0m\n%b' "$PS"; sleep 0.9
 }
 type_out() {
   local s=$1 i
   for ((i = 0; i < ${#s}; i++)); do printf '%s' "${s:i:1}"; sleep 0.035; done
 }
-run() { # type a command, then run it
-  printf '%b' "$PS"; type_out "$1"; sleep 0.5; printf '\n'
+run() { # type a command, run it, then prompt
+  type_out "$1"; sleep 0.5; printf '\n'
   eval "$1"
+  printf '%b' "$PS"
   sleep "${2:-2.2}"
+}
+interactive() { # type a command whose program an expect script drives, then prompt
+  type_out "$1"; sleep 0.6; printf '\n'
+  shift
+  expect "$@"
+  printf '%b' "$PS"
+  sleep 1.5
 }
 
 clear
+printf '%b' "$PS"
 case ${1:-list} in
   list)
     say "ls, but for your agent sessions"
@@ -56,9 +83,8 @@ case ${1:-list} in
     say "See sessions from every agent and project, starting with the most recent."
     run "lsa -a" 3
     say "pick one up where you left it"
-    printf '%b' "$PS"; type_out "lsa resume 3"; sleep 0.6; printf '\n'
     # drive the resumed Goose session: one follow-up, then leave
-    expect -c '
+    interactive "lsa resume 3" -c '
       set timeout 120
       encoding system utf-8
       spawn -noecho bash -c {lsa resume 3}
@@ -70,12 +96,10 @@ case ${1:-list} in
       sleep 4
       send "/exit\r"
       expect -timeout 20 eof'
-    sleep 1.5
     say "Continue the Goose conversation in Claude."
-    printf '%b' "$PS"
-    type_out 'lsa handoff 2026 claude'
-    sleep 0.6; printf '\n'
-    expect -f "$(dirname "$LSA")/demo/handoff.exp"
+    interactive "lsa handoff 2026 claude" -f "$(dirname "$LSA")/demo/handoff.exp"
+    say "Now hand the Claude conversation to Codex."
+    interactive "lsa handoff 0 codex" -f "$(dirname "$LSA")/demo/handoff-codex.exp"
     exit 0
     ;;
   pick)
@@ -88,4 +112,4 @@ case ${1:-list} in
     run "lsa -a -l -n 3" 3
     ;;
 esac
-printf '%b' "$PS"; sleep 1.5
+sleep 1.5

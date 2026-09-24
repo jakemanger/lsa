@@ -1,7 +1,7 @@
 #!/usr/bin/expect -f
 # a real interactive handoff: Claude resumes the Goose conversation as its own
 # play.sh runs Claude with no tools and the normal login.
-set timeout 120
+source [file join [file dirname [info script]] agent.tcl]
 encoding system utf-8
 set trust_sent 0
 spawn -noecho bash -c {lsa handoff 2026 claude}
@@ -18,28 +18,21 @@ expect_before {
         }
         exp_continue
     }
-    timeout { puts stderr "demo: Claude handoff timed out"; exit 1 }
-    eof { puts stderr "demo: Claude exited before the handoff finished"; exit 1 }
 }
 
-# Claude opens idle with the conversation loaded; type the next message.
-expect -re {\x1b\]0;✳}
-sleep 2
-foreach ch [split "Make the release notes one sentence." ""] { send -- $ch; sleep 0.04 }
-sleep 0.4
+# the title is set before the history draws; wait for the prompt footer, which
+# comes after it, then hold the loaded conversation on screen before typing
+wait_for {shortcuts}
+pause 3.5
+type "Make the release notes one sentence."
+pause 0.4
 send "\033\[13u"
-expect -re {⏺}
-expect -re {\x1b\]0;✳}
-# Keep reading while holding the last frame so Claude can finish redrawing.
-expect_before
-expect -timeout 5 {
-    timeout {}
-    eof { puts stderr "demo: Claude exited after the handoff"; exit 1 }
-}
+wait_for {⏺}
+wait_for {\x1b\]0;✳}
+pause 5
 
-# End the capture on the conversation, then close the test session quietly.
-log_user 0
+# quit Claude on camera, as a person would
 send "\003"
-sleep 0.5
+pause 0.5
 send "\003"
 expect -timeout 10 eof

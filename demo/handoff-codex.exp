@@ -1,0 +1,34 @@
+#!/usr/bin/expect -f
+# the Claude conversation, which started in Goose, handed on to a real Codex
+source [file join [file dirname [info script]] agent.tcl]
+encoding system utf-8
+spawn -noecho bash -c {lsa handoff 0 codex}
+
+# the recorder has no real terminal, so answer the queries codex lays itself out
+# and styles itself from: the cursor (on the last of the 30 rows, after the
+# command), colours (the gif theme's), device attributes, keyboard
+expect_before {
+    -re {\x1b\[6n} { send "\033\[30;1R"; exp_continue }
+    -re {\x1b\]10;\?} { send "\033\]10;rgb:c9c9/d1d1/d9d9\033\\"; exp_continue }
+    -re {\x1b\]11;\?} { send "\033\]11;rgb:1717/1b1b/2121\033\\"; exp_continue }
+    -re {\x1b\[\?u} { send "\033\[?0u"; exp_continue }
+    -re {\x1b\[c} { send "\033\[?62;22c"; exp_continue }
+    -re {Folder access} { sleep 0.8; send "\r"; exp_continue }
+}
+
+# wait until the history has drawn, then hold it on screen before typing
+wait_for {sentence}
+pause 3.5
+type "Now make it a tweet."
+pause 1
+send "\r"
+wait_for {Working}
+pause 2
+settle 4
+pause 2
+
+# quit Codex on camera, the way a person would
+type "/quit"
+pause 0.8
+send "\r"
+expect -timeout 20 eof

@@ -437,7 +437,7 @@ SHOW_JQ='
       + (if .is_error // .isError then " error" else "" end) + "]\n" + (.content | text)
     elif has("functionCall") then "[tool: " + .functionCall.name + "] " + (.functionCall.args | safe | tojson)
     elif has("functionResponse") then "[result: " + .functionResponse.name + "]\n" + (.functionResponse.response | text)
-    elif .type? == "thinking" then "[thinking]\n" + (.thinking // .text // "")
+    elif .type? == "thinking" then (.thinking // .text // "") | if . == "" then "" else "[thinking]\n" + . end
     elif has("text") then .text | text
     elif .type? == "input_image" or .type? == "image" or .type? == "image_url" or .type? == "document"
       or has("inlineData") or has("fileData") then "[attachment] " + (safe | tojson)
@@ -542,12 +542,19 @@ cmd_show() {
 # ---------- handoff: continue a session in another agent ----------
 HANDOFF_AGENTS='claude codex pi gemini qwen cline opencode goose muse openclaw'
 
-# a session as alternating user and assistant messages, the shape every agent resumes
+# a session as alternating user and assistant messages, the shape every agent resumes.
+# Only the conversation goes across: the source harness's own prompts, reminders
+# and per-turn context stay behind (lsa show still prints all of it).
 handoff_turns() ( # agent id index-path cwd
   set -o pipefail
   export LSA_TURNS=1
   show_session "$@" | jq -s --arg agent "$1" --arg id "$2" '
-    [{role: "user", text: "[continued from \($agent) session \($id) with lsa handoff; its tool calls and results are shown as text]"}]
+    def harness: test("^(recorded instructions|session context|turn_context|world_state|developer|system \\(.*\\))$")
+      or (startswith("context (") and (test("\\((file|edited_text_file|queued_command|compact_file_reference|custom|project-rule)\\)$") | not));
+    def unwrap: gsub("<(system-reminder|turn-context|environment_context)>[\\s\\S]*?</(system-reminder|turn-context|environment_context)>\\s*"; "");
+    map(select(.role | harness | not) | .text |= unwrap
+        | select(.text | test("\\S")) | select(.text | startswith("# AGENTS.md instructions") | not))
+    | [{role: "user", text: "[continued from \($agent) session \($id) with lsa handoff; its tool calls and results are shown as text]"}]
     + map(if .role == "user" or .role == "assistant" then .
           elif .role == "gemini" or .role == "model" or (.role | startswith("reasoning")) then {role: "assistant", text}
           else {role: "user", text: ("[" + .role + "]\n" + .text)} end)

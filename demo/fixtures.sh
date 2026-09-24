@@ -24,7 +24,7 @@ claude() { # id cwd age prompt
   local d
   d="$H/.claude/projects/$(printf '%s' "$2" | sed 's/[^A-Za-z0-9]/-/g')"
   mkdir -p "$d"
-  printf '{"type":"user","timestamp":"%s","message":{"role":"user","content":[{"type":"text","text":"%s"}]},"cwd":"%s","sessionId":"%s"}\n' "$(iso "$3")" "$4" "$2" "$1" > "$d/$1.jsonl"
+  printf '{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"%s","message":{"role":"user","content":[{"type":"text","text":"%s"}]},"cwd":"%s","sessionId":"%s"}\n' "$(iso "$3")" "$4" "$2" "$1" > "$d/$1.jsonl"
   printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"On it. Let me look at the code first."},{"type":"tool_use","name":"Read","input":{"file_path":"src/app.ts"}}]},"cwd":"%s"}\n' "$2" >> "$d/$1.jsonl"
   printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done: two files changed, tests pass."}]},"cwd":"%s"}\n' "$2" >> "$d/$1.jsonl"
   age "$d/$1.jsonl" "$3"
@@ -33,7 +33,7 @@ codex() { # id cwd age prompt
   local d="$H/.codex/sessions/2026/09/21" f
   mkdir -p "$d"; f="$d/rollout-2026-09-21T10-00-00-$1.jsonl"
   {
-  printf '{"type":"session_meta","payload":{"session_id":"%s","cwd":"%s","source":"cli","thread_source":"user"}}\n' "$1" "$2"
+  printf '{"type":"session_meta","payload":{"session_id":"%s","id":"%s","timestamp":"%s","cwd":"%s","originator":"codex_cli_rs","cli_version":"0.156.1","source":"cli","thread_source":"user"}}\n' "$1" "$1" "$(iso "$3")" "$2"
   printf '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>cwd=%s</environment_context>"}]}}\n' "$2"
   printf '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"%s"}]}}\n' "$4"
   printf '{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Sure. I will start with the failing test and work back from there."}]}}\n'

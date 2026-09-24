@@ -223,6 +223,7 @@ if command -v jq >/dev/null; then
 {"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","is_error":true,"content":[{"type":"text","text":"line one\nline two\tindent"}]},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"DO_NOT_DUMP_BINARY"}}]}}
 {"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto"}}
 {"type":"summary","summary":"Pending: change port 8123 to 9000."}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"sig"},{"type":"text","text":"after hidden thinking"}]}}
 JSON
   shown=$(bash "$LSA" show aaaa)
   check "show renders attachment content" yes "$(contains $'Read src/app.ts:\nconst port = 8123;' "$shown")"
@@ -231,6 +232,8 @@ JSON
   check "show marks images without dumping base64" yes "$(contains '[binary data omitted]' "$shown")"
   check "show does not dump binary" no "$(contains DO_NOT_DUMP_BINARY "$shown")"
   check "show includes compaction summaries" yes "$(contains 'Pending: change port 8123 to 9000.' "$shown")"
+  check "show skips thinking with no recorded text" no "$(contains $'[thinking]\nafter hidden thinking' "$shown")"
+  check "show keeps the text after it" yes "$(contains 'after hidden thinking' "$shown")"
 
   cat >> "$tmp/.codex/sessions/2026/09/22/rollout-2026-09-22T10-00-00-bbbb2222-0000-0000-0000-000000000000.jsonl" <<'JSON'
 {"type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"call-1","arguments":"{\"cmd\":\"git diff\"}"}}
@@ -454,6 +457,16 @@ SH
     check "handoff to $target keeps the first prompt" yes "$(contains 'fix the "login" bug' "$text")"
     check "handoff to $target names the source session" yes "$(contains 'claude session aaaa1111-0000-0000-0000-000000000000' "$text")"
   done
+  HANDOFF_HOME=$(handoff_home codex)
+  text=$(native_text codex "$(handoff_output codex aaaa codex)")
+  check "handoff keeps file context" yes "$(contains 'const port = 8123;' "$text")"
+  check "handoff leaves the source agent's system prompt behind" no "$(contains 'Project rule: run the unit tests.' "$text")"
+  if [ $have_sqlite = 1 ]; then
+    HANDOFF_HOME=$(handoff_home codex)
+    text=$(native_text codex "$(XDG_DATA_HOME="$tmp/.local/share" handoff_output codex 2026 codex)")
+    check "handoff leaves injected turn context behind" no "$(contains 'turn-context' "$text")"
+    check "handoff keeps the goose conversation" yes "$(contains 'honk at the tests' "$text")"
+  fi
   HANDOFF_HOME=$(handoff_home claude)
   check "handoff to claude alternates user and assistant" yes \
     "$(jq -rs '[.[].type] | . as $t | all(range(1; length); $t[.] != $t[. - 1])' "$tmp"/.claude/projects/*/"$(arg 2 <<< "$(handoff_output claude aaaa claude)")".jsonl | sed 's/true/yes/')"
