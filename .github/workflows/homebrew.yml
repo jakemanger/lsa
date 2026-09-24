@@ -22,7 +22,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          test "$(gh repo view --json isPrivate --jq .isPrivate)" = false
+          test "$(gh repo view "$GH_REPO" --json isPrivate --jq .isPrivate)" = false
           test "$(gh repo view jakemanger/homebrew-tap --json isPrivate --jq .isPrivate)" = false
           test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = false
           gh release download "$RELEASE_TAG" --dir assets \

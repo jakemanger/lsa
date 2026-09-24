@@ -21,7 +21,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          test "$(gh repo view --json isPrivate --jq .isPrivate)" = false
+          test "$(gh repo view "$GH_REPO" --json isPrivate --jq .isPrivate)" = false
           gh api --paginate "repos/$GH_REPO/releases" \
             --jq '.[] | select(.draft == false and .prerelease == false) | select(any(.assets[]; .name == "lsa.deb")) | .tag_name' > tags.txt
           test -s tags.txt
