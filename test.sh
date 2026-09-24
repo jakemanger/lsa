@@ -137,7 +137,7 @@ if [ $have_sqlite = 1 ]; then
   check "openclaw title and session key" "main:main" "$(bash "$LSA" -a -t openclaw | awk '{print $5}')"
   check "openclaw first user message" "what is on my calendar" "$(bash "$LSA" -a -t openclaw | title_of)"
   check "show opencode" $'\n## user\nrefactor the login form\n\n## assistant\nDone.' "$(bash "$LSA" show ses_g)"
-  check "show goose skips turn context" $'\n## user\nhonk at the tests\n\n## assistant\nHONK' "$(bash "$LSA" show 2026)"
+  check "show goose retains turn context" $'\n## user\nhonk at the tests\n\n## user\n<turn-context>now</turn-context>\n\n## assistant\nHONK' "$(bash "$LSA" show 2026)"
 else
   echo "skip database agents (no sqlite3)"
 fi
@@ -201,8 +201,8 @@ check "empty dir hint" "lsa: no sessions in $tmp (try lsa -a)" "$(cd "$tmp" && b
 
 if command -v jq >/dev/null; then
   check "show claude" $'\n## user\nfix the "login" bug\nplease\n\n## assistant\nOn it.\n[tool: bash] {"command":"ls"}' "$(bash "$LSA" show aaaa)"
-  check "show codex" $'\n## user\nadd subtitles\n\n## assistant\nDone.' "$(bash "$LSA" show bbbb)"
-  check "show pi" $'\n## user\nhello pi\n\n## assistant\nhi' "$(bash "$LSA" show cccc)"
+  check "show codex keeps recorded instructions" $'\n## session context\n'"{\"cwd\":\"$proj\"}"$'\n\n## developer\n<skills>\n\n## user\n# AGENTS.md instructions\nstuff\n\n## user\n<environment_context>x</environment_context>\n\n## user\nadd subtitles\n\n## assistant\nDone.' "$(bash "$LSA" show bbbb)"
+  check "show pi keeps project context" $'\n## session context\n'"{\"cwd\":\"$tmp/elsewhere\"}"$'\n\n## user\nhello pi\n\n## assistant\nhi' "$(bash "$LSA" show cccc)"
   check "show qwen" $'\n## user\nwrite a haiku about awk\n\n## assistant\nfields split at dawn' "$(bash "$LSA" show eeee)"
   check "show gemini" $'\n## user\nexplain this regex\n\n## gemini\nIt matches dates.' "$(bash "$LSA" show ffff)"
   check "show cline strips the wrapper" $'\n## user\nmake the sidebar collapsible\n\n## assistant\nSure.' "$(bash "$LSA" show 1758)"
@@ -210,6 +210,83 @@ if command -v jq >/dev/null; then
   [ $have_sqlite = 1 ] && check "show openclaw" $'\n## user\nwhat is on my calendar\n\n## assistant\nNothing today.' "$(bash "$LSA" show iiii)"
 else
   echo "skip show tests (no jq)"
+fi
+
+# Regression fixtures for information that text-only readers used to discard.
+# Check the saved evidence, including multiline output and non-text markers.
+contains() { case $2 in *"$1"*) printf yes;; *) printf no;; esac; }
+if command -v jq >/dev/null; then
+  cat >> "$tmp/.claude/projects/x/aaaa1111-0000-0000-0000-000000000000.jsonl" <<'JSON'
+{"type":"attachment","attachment":{"type":"file","path":"src/app.ts"},"rendered":[{"content":"Read src/app.ts:\nconst port = 8123;"}]}
+{"type":"attachment","attachment":{"type":"prompt_snapshot","systemPrompt":["Project rule: run the unit tests."]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-1","name":"Read","input":{"file_path":"src/app.ts"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","is_error":true,"content":[{"type":"text","text":"line one\nline two\tindent"}]},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"DO_NOT_DUMP_BINARY"}}]}}
+{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto"}}
+{"type":"summary","summary":"Pending: change port 8123 to 9000."}
+JSON
+  shown=$(bash "$LSA" show aaaa)
+  check "show renders attachment content" yes "$(contains $'Read src/app.ts:\nconst port = 8123;' "$shown")"
+  check "show keeps recorded system prompt" yes "$(contains 'Project rule: run the unit tests.' "$shown")"
+  check "show pairs tool results and preserves whitespace" yes "$(contains $'[result id=tool-1 error]\nline one\nline two\tindent' "$shown")"
+  check "show marks images without dumping base64" yes "$(contains '[binary data omitted]' "$shown")"
+  check "show does not dump binary" no "$(contains DO_NOT_DUMP_BINARY "$shown")"
+  check "show includes compaction summaries" yes "$(contains 'Pending: change port 8123 to 9000.' "$shown")"
+
+  cat >> "$tmp/.codex/sessions/2026/09/22/rollout-2026-09-22T10-00-00-bbbb2222-0000-0000-0000-000000000000.jsonl" <<'JSON'
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"call-1","arguments":"{\"cmd\":\"git diff\"}"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call-1","output":"diff --git a/app b/app\n-old\n+new"}}
+{"type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch","call_id":"call-2","input":"*** Begin Patch\n*** End Patch"}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call-2","output":[{"type":"text","text":"Patch applied."},{"type":"input_image","image_url":"data:image/png;base64,DO_NOT_DUMP_BINARY"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<request>Keep XML prompts too.</request>"}]}}
+{"type":"world_state","payload":{"full":true,"state":{"agents_md":"Use pnpm here."}}}
+{"type":"turn_context","payload":{"cwd":"/project/subdir","model":"test-model"}}
+{"type":"compacted","payload":{"message":"Tests still failing.","replacement_history":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Keep the migration backwards compatible."}]},{"type":"compaction","encrypted_content":"DO_NOT_DUMP_ENCRYPTED"}],"retained_context":{"verified_answers":["API contract confirmed."]}}}
+{"type":"event_msg","payload":{"type":"turn_aborted","reason":"interrupted"}}
+JSON
+  shown=$(bash "$LSA" show bbbb)
+  check "show codex includes function calls" yes "$(contains '[tool: exec_command id=call-1]' "$shown")"
+  check "show codex preserves diffs" yes "$(contains $'[result id=call-1]\ndiff --git a/app b/app\n-old\n+new' "$shown")"
+  check "show codex includes custom tools" yes "$(contains $'[tool: apply_patch id=call-2]\n*** Begin Patch' "$shown")"
+  check "show codex includes structured tool output" yes "$(contains 'Patch applied.' "$shown")"
+  check "show keeps XML user prompts" yes "$(contains '<request>Keep XML prompts too.</request>' "$shown")"
+  check "show keeps world state" yes "$(contains 'Use pnpm here.' "$shown")"
+  check "show keeps per-turn project" yes "$(contains '/project/subdir' "$shown")"
+  check "show keeps compaction replacement text" yes "$(contains 'Keep the migration backwards compatible.' "$shown")"
+  check "show keeps retained context" yes "$(contains 'API contract confirmed.' "$shown")"
+  check "show marks interruption" yes "$(contains '## turn_aborted' "$shown")"
+  check "show omits encrypted state" no "$(contains DO_NOT_DUMP_ENCRYPTED "$shown")"
+  check "show omits embedded image data" no "$(contains DO_NOT_DUMP_BINARY "$shown")"
+
+  cat >> "$tmp/.pi/agent/sessions/x/2026-09-22T09-00-00-000Z_cccc3333-0000-0000-0000-000000000000.jsonl" <<'JSON'
+{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","id":"pi-1","name":"read","arguments":{"path":"app.ts"}}]}}
+{"type":"message","message":{"role":"toolResult","toolCallId":"pi-1","toolName":"read","isError":false,"content":[{"type":"text","text":"pi line one\npi line two"}]}}
+{"type":"compaction","summary":"Remember the database migration."}
+{"type":"branch_summary","summary":"The previous branch ruled out a cache bug."}
+{"type":"custom_message","customType":"project-rule","display":false,"content":"Use pnpm, not npm."}
+JSON
+  shown=$(bash "$LSA" show cccc)
+  check "show pi pairs result with tool" yes "$(contains $'[result: read id=pi-1]\npi line one\npi line two' "$shown")"
+  check "show pi keeps compaction" yes "$(contains 'Remember the database migration.' "$shown")"
+  check "show pi keeps branch summaries" yes "$(contains 'ruled out a cache bug' "$shown")"
+  check "show pi keeps invisible context messages" yes "$(contains 'Use pnpm, not npm.' "$shown")"
+
+  cat >> "$tmp/.qwen/projects/x/chats/eeee5555-0000-0000-0000-000000000000.jsonl" <<'JSON'
+{"type":"assistant","message":{"parts":[{"functionCall":{"name":"read_file","args":{"path":"config.ts"}}},{"functionResponse":{"name":"read_file","response":{"text":"qwen file content"}}}]}}
+JSON
+  check "show qwen keeps tool responses" yes "$(contains 'qwen file content' "$(bash "$LSA" show eeee)")"
+  cat >> "$tmp/.gemini/tmp/quiet-otter/chats/session-2026-09-22T08-00-00-ffff6666.jsonl" <<'JSON'
+{"type":"gemini","content":"Checking.","toolCalls":[{"id":"g1","name":"read_file","args":{"path":"config.ts"},"result":[{"functionResponse":{"name":"read_file","response":{"output":"gemini file content"}}}]}]}
+JSON
+  check "show gemini keeps tool results" yes "$(contains 'gemini file content' "$(bash "$LSA" show ffff)")"
+  if [ $have_sqlite = 1 ]; then
+    sqlite3 "$tmp/.local/share/goose/sessions/sessions.db" "insert into messages values (4,'m4','20260922_7','assistant','[{\"type\":\"text\",\"text\":\"first block\"},{\"type\":\"text\",\"text\":\"second block\\nwith a newline\\tand tab\"},{\"type\":\"toolRequest\",\"toolCall\":{\"name\":\"read\",\"arguments\":{\"path\":\"goose.ts\"}}}]',4);"
+    shown=$(bash "$LSA" show 2026)
+    check "show goose keeps all blocks and whitespace" yes "$(contains $'first block\nsecond block\nwith a newline\tand tab' "$shown")"
+    check "show goose keeps tool request" yes "$(contains goose.ts "$shown")"
+    sqlite3 "$tmp/.local/share/opencode/opencode.db" "insert into part values ('prt_3','msg_2','ses_gggg7777aaaa',3,3,'{\"type\":\"tool\",\"tool\":\"bash\",\"callID\":\"oc-1\",\"state\":{\"status\":\"completed\",\"input\":{\"command\":\"git diff\"},\"output\":\"OpenCode result\"}}');"
+    check "show opencode keeps tool state and output" yes "$(contains 'OpenCode result' "$(bash "$LSA" show ses_g)")"
+  fi
+  check "show unknown prefix fails" 1 "$(bash "$LSA" show zzzz >/dev/null 2>&1; echo $?)"
 fi
 
 # Resume still invokes each native agent in its directory; stubs avoid launching
@@ -304,5 +381,84 @@ touch -t 202601010000 "$spaced/projects/x/abcd0000-0000-0000-0000-000000000000.j
 long=$(CLAUDE_CONFIG_DIR="$spaced" COLUMNS=40 bash "$LSA" -a -t claude -l)
 check "-l preserves directory with spaces and quotes" "1" "$(printf '%s\n' "$long" | grep -Fc "$tmp/project with 'quotes'")"
 check "-l preserves transcript path with spaces" "1" "$(printf '%s\n' "$long" | grep -Fc "$spaced/projects/x/abcd0000-0000-0000-0000-000000000000.jsonl")"
+
+# check the native input each agent receives, without making model requests
+if command -v jq >/dev/null; then
+  mkdir -p "$tmp/handoff-bin"
+  export LSA_TEST_CODEX_CONTEXT="$tmp/codex-context"
+  cat > "$tmp/handoff-bin/agent" <<'SH'
+#!/usr/bin/env bash
+set -eu
+if [ "${0##*/}" = codex ] && [ "${1:-}" = app-server ]; then
+  while IFS= read -r request; do
+    case $(jq -r '.method' <<< "$request") in
+      initialize) printf '{"id":1,"result":{}}\n';;
+      initialized) ;;
+      thread/start)
+        printf '{"method":"thread/started","params":{}}\n'
+        printf '{"id":2,"result":{"thread":{"id":"preloaded-session"}}}\n';;
+      thread/inject_items)
+        if [ "${LSA_TEST_CODEX_ERROR:-}" = 1 ]; then
+          printf '{"id":3,"error":{"message":"method not found"}}\n'
+        else
+          jq -er '.params.items[0] | select(.role == "user") | .content[0].text' <<< "$request" > "$LSA_TEST_CODEX_CONTEXT"
+          printf '{"id":3,"result":{}}\n'
+        fi;;
+      *) exit 1;;
+    esac
+  done
+  exit 0
+fi
+printf '%s\n' "$PWD" "${0##*/}" "argc=$#"
+printf 'arg=%s\n' "$@"
+case ${0##*/} in
+  claude) cat;;
+  pi) for arg in "$@"; do case $arg in @*) cat "${arg#@}";; esac; done;;
+  codex)
+    [ "$1" = resume ] && [ "$2" = preloaded-session ]
+    cat "$LSA_TEST_CODEX_CONTEXT";;
+esac
+if [ "${LSA_TEST_READ_STDIN:-}" = 1 ]; then
+  IFS= read -r followup
+  printf '\nstdin=%s\n' "$followup"
+fi
+SH
+  chmod +x "$tmp/handoff-bin/agent"
+  for agent in claude codex pi; do cp "$tmp/handoff-bin/agent" "$tmp/handoff-bin/$agent"; done
+  handoff_output() { PATH="$tmp/handoff-bin:$PATH" XDG_CACHE_HOME="$tmp/cache with spaces" bash "$LSA" handoff "$@" 2>"$tmp/handoff-error"; }
+  for target in claude codex pi; do
+    handed=$(handoff_output aaaa "$target")
+    check "handoff to $target starts in source project" yes "$(contains "$proj"$'\n'"$target" "$handed")"
+    check "handoff to $target supplies context before a model runs" yes "$(contains $'line one\nline two\tindent' "$handed")"
+    check "handoff to $target sends a continuation prompt" yes "$(contains 'arg=Continue this conversation from where it left off.' "$handed")"
+    check "handoff to $target keeps source id" yes "$(contains 'Session: aaaa1111-0000-0000-0000-000000000000' "$handed")"
+    snapshot=$(sed -n 's/^lsa: saved context: //p' "$tmp/handoff-error")
+    check "handoff to $target writes a private snapshot" 600 "$(stat -f %Lp "$snapshot" 2>/dev/null || stat -c %a "$snapshot")"
+  done
+  check "handoff forwards destination options" yes "$(contains $'arg=--model\narg=test-model' "$(handoff_output aaaa codex --model test-model)")"
+  for target in codex pi; do
+    check "handoff to $target preserves stdin" yes "$(contains 'stdin=follow-up' "$(printf 'follow-up\n' | LSA_TEST_READ_STDIN=1 handoff_output aaaa "$target")")"
+  done
+  check "failed Codex import stops handoff" 1 "$(LSA_TEST_CODEX_ERROR=1 handoff_output aaaa codex >"$tmp/failed-import"; echo $?)"
+  check "failed Codex import never opens an interactive session" '' "$(cat "$tmp/failed-import")"
+  touch "$tmp/.claude/projects/x/aaaa1111-0000-0000-0000-000000000000.jsonl"
+  check "handoff resolves index before launching destination" yes "$(contains 'Session: aaaa1111-0000-0000-0000-000000000000' "$(handoff_output 0 codex)")"
+  check "handoff rejects unknown session" 1 "$(handoff_output zzzz codex >/dev/null; echo $?)"
+  check "handoff rejects unsupported destination" 2 "$(handoff_output aaaa unknown >/dev/null; echo $?)"
+  check "handoff requires destination" 2 "$(bash "$LSA" handoff aaaa >/dev/null 2>&1; echo $?)"
+  check "handoff does not invent a missing project" 1 "$(rmdir "$tmp/elsewhere"; handoff_output cccc codex >/dev/null; echo $?)"
+  mkdir -p "$tmp/elsewhere"
+
+  # full transcripts must survive OS argv limits
+  awk 'BEGIN { printf "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\""; for (i=0;i<300000;i++) printf "x"; print "LARGE_TRANSCRIPT_END\"}}" }' >> "$tmp/.claude/projects/x/aaaa1111-0000-0000-0000-000000000000.jsonl"
+  for target in claude codex pi; do
+    handed=$(handoff_output aaaa "$target")
+    check "handoff to $target handles transcripts above argv limits" yes "$(contains LARGE_TRANSCRIPT_END "$handed")"
+  done
+
+  printf '{broken json\n' >> "$tmp/.claude/projects/x/aaaa1111-0000-0000-0000-000000000000.jsonl"
+  check "handoff never launches with an unreadable transcript" 1 "$(handoff_output aaaa codex >"$tmp/failed-handoff"; echo $?)"
+  check "failed handoff produced no agent output" '' "$(cat "$tmp/failed-handoff")"
+fi
 
 exit $fail

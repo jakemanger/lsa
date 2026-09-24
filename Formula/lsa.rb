@@ -4,7 +4,7 @@ class Lsa < Formula
   homepage "https://github.com/jakemanger/lsa"
   url "https://github.com/jakemanger/lsa/releases/download/v0.1.0/lsa"
   version "0.1.0"
-  sha256 "191f5773427e3e34d94cf5fc42abf7bdbd8624c0d649477848a45b275bf2e204"
+  sha256 "048448bbc13c5078a8929bcf27434bda39be1205fa156b1590d022108d34ea75"
   license "MIT"
 
   depends_on "jq"

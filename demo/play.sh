@@ -6,7 +6,20 @@ export LSA
 PATH="$(dirname "$LSA"):$PATH"
 export PATH
 : "${DEMO_HOME:?}"
-# Only fixture readers and Goose use the demo home. Claude keeps its normal login.
+# Only fixture readers and Goose use the demo home. The handoff launches a
+# real Claude with its normal login and read-only tools for the saved context.
+export DEMO_REAL_HOME=$HOME DEMO_CLAUDE
+DEMO_CLAUDE=$(command -v claude)
+mkdir -p "$DEMO_HOME/bin"
+cat > "$DEMO_HOME/bin/claude" <<'SH'
+#!/usr/bin/env bash
+export HOME=$DEMO_REAL_HOME
+unset XDG_CACHE_HOME
+exec "$DEMO_CLAUDE" --setting-sources "" --strict-mcp-config --tools Read --allowedTools Read --model sonnet --effort low --permission-mode manual "$@"
+SH
+chmod +x "$DEMO_HOME/bin/claude"
+PATH="$DEMO_HOME/bin:$PATH"
+export PATH
 lsa() { env HOME="$DEMO_HOME" XDG_CACHE_HOME="$DEMO_HOME/.cache" "$LSA" "$@"; }
 export -f lsa
 export COLUMNS=${DEMO_COLS:-100}   # the recorder is headless, so tput cannot know the window size
@@ -43,7 +56,7 @@ case ${1:-list} in
       spawn -noecho bash -c {lsa resume 3}
       expect -re {Enter to send}
       sleep 1.5
-      send "thanks, now make them shorter\r"
+      send "Shorten these, then note that the next step is a one-sentence version.\r"
       expect -re {[0-9]+\.[0-9]+s}          ;# goose prints the elapsed time when a reply is complete
       expect -timeout 20 -re {Enter to send}
       sleep 4
@@ -52,7 +65,7 @@ case ${1:-list} in
     sleep 1.5
     say "Continue the Goose conversation in Claude."
     printf '%b' "$PS"
-    type_out 'lsa show 2026 | claude "Continue from Goose. Make the release notes one sentence."'
+    type_out 'lsa handoff 2026 claude'
     sleep 0.6; printf '\n'
     expect -f "$(dirname "$LSA")/demo/handoff.exp"
     exit 0
@@ -60,7 +73,8 @@ case ${1:-list} in
   pick)
     say "0 is the newest. pick by index or by id, like git"
     run "lsa -a -n 6" 2
-    run "lsa show 1 | head -12" 3
+    say "show includes the tool calls and results, too"
+    run "lsa show 01a0c7d | tail -n 14" 4
     run "lsa path 2"
     say "-l adds the working directory and transcript path"
     run "lsa -a -l -n 3" 3

@@ -1,10 +1,10 @@
 #!/usr/bin/expect -f
-# A real interactive handoff. Use Sonnet with tools and custom settings disabled
-# to keep the recording focused on the invented release notes.
+# a real interactive handoff with the transcript loaded at startup
+# play.sh configures Claude with only its Read tool and the normal login.
 set timeout 120
 encoding system utf-8
 set trust_sent 0
-spawn -noecho bash -c {lsa show 2026 | claude --setting-sources "" --strict-mcp-config --tools "" --model sonnet --effort low --permission-mode manual "Continue from Goose. Make the release notes one sentence."}
+spawn -noecho bash -c {lsa handoff 2026 claude}
 
 expect_before {
     -re {\x1b\[6n} { send "\033\[1;1R"; exp_continue }

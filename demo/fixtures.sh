@@ -21,7 +21,8 @@ iso() { TZ=UTC date -r $(( $(date +%s) - $1 )) +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/nu
 ago_ms() { echo $(( ($(date +%s) - $1) * 1000 )); }
 
 claude() { # id cwd age prompt
-  local d="$H/.claude/projects/$(printf '%s' "$2" | sed 's/[^A-Za-z0-9]/-/g')"
+  local d
+  d="$H/.claude/projects/$(printf '%s' "$2" | sed 's/[^A-Za-z0-9]/-/g')"
   mkdir -p "$d"
   printf '{"type":"user","timestamp":"%s","message":{"role":"user","content":[{"type":"text","text":"%s"}]},"cwd":"%s","sessionId":"%s"}\n' "$(iso "$3")" "$4" "$2" "$1" > "$d/$1.jsonl"
   printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"On it. Let me look at the code first."},{"type":"tool_use","name":"Read","input":{"file_path":"src/app.ts"}}]},"cwd":"%s"}\n' "$2" >> "$d/$1.jsonl"
@@ -31,14 +32,22 @@ claude() { # id cwd age prompt
 codex() { # id cwd age prompt
   local d="$H/.codex/sessions/2026/09/21" f
   mkdir -p "$d"; f="$d/rollout-2026-09-21T10-00-00-$1.jsonl"
-  printf '{"type":"session_meta","payload":{"session_id":"%s","cwd":"%s","source":"cli","thread_source":"user"}}\n' "$1" "$2" > "$f"
-  printf '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>cwd=%s</environment_context>"}]}}\n' "$2" >> "$f"
-  printf '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"%s"}]}}\n' "$4" >> "$f"
-  printf '{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Sure. I will start with the failing test and work back from there."}]}}\n' >> "$f"
+  {
+  printf '{"type":"session_meta","payload":{"session_id":"%s","cwd":"%s","source":"cli","thread_source":"user"}}\n' "$1" "$2"
+  printf '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>cwd=%s</environment_context>"}]}}\n' "$2"
+  printf '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"%s"}]}}\n' "$4"
+  printf '{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Sure. I will start with the failing test and work back from there."}]}}\n'
+  cat <<'JSON'
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"test-1","arguments":"{\"cmd\":\"pytest -q tests/test_auth.py\"}"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"test-1","output":"FAILED tests/test_auth.py::test_login\nExpected status 200; got 401.\nThe fixture token expired yesterday."}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Next: refresh the token fixture and rerun the test."}]}}
+JSON
+  } > "$f"
   age "$f" "$3"
 }
 pi() { # id cwd age prompt
-  local d="$H/.pi/agent/sessions/--$(printf '%s' "$2" | sed 's|/|-|g')--" f
+  local d f
+  d="$H/.pi/agent/sessions/--$(printf '%s' "$2" | sed 's|/|-|g')--"
   mkdir -p "$d"; f="$d/2026-09-21T10-00-00-000Z_$1.jsonl"
   printf '{"type":"session","version":3,"id":"%s","cwd":"%s"}\n' "$1" "$2" > "$f"
   printf '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"%s"}]}}\n' "$4" >> "$f"
@@ -46,7 +55,8 @@ pi() { # id cwd age prompt
   age "$f" "$3"
 }
 qwen() { # id cwd age prompt
-  local d="$H/.qwen/projects/$(printf '%s' "$2" | sed 's/[^A-Za-z0-9]/-/g')/chats"
+  local d
+  d="$H/.qwen/projects/$(printf '%s' "$2" | sed 's/[^A-Za-z0-9]/-/g')/chats"
   mkdir -p "$d"
   printf '{"uuid":"u1","sessionId":"%s","type":"user","cwd":"%s","message":{"role":"user","parts":[{"text":"%s"}]}}\n{"uuid":"u2","sessionId":"%s","type":"assistant","cwd":"%s","message":{"role":"model","parts":[{"text":"Starting with the tests."}]}}\n' "$1" "$2" "$4" "$1" "$2" > "$d/$1.jsonl"
   age "$d/$1.jsonl" "$3"

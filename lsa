@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # lsa - ls for agent sessions.
-# Lists every coding-agent transcript on the machine, newest first.
 # https://github.com/jakemanger/lsa
 set -eu
 
@@ -12,6 +11,7 @@ lsa - ls for agent sessions
 
 usage: lsa [options] [dir]          list sessions started in dir (default: .)
        lsa show <id>                print a transcript as plain text
+       lsa handoff <id> <agent> [options...]  continue in claude, codex or pi
        lsa path <id>                print where the transcript lives
        lsa resume <id>              reopen the session in its own agent
 
@@ -31,8 +31,6 @@ EOF
 }
 
 # ---------- where each agent keeps its sessions ----------
-# File-based agents: one line per agent, name and root directory. Every
-# transcript under a root belongs to that agent.
 XDG_DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
 GEMINI_HOME="${GEMINI_CLI_HOME:-$HOME/.gemini}"
 ROOTS="claude	${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects
@@ -41,7 +39,6 @@ pi	${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/sessions
 gemini	$GEMINI_HOME/tmp
 qwen	$HOME/.qwen/projects
 cline	$HOME/.cline/data/sessions"
-# Database-backed agents: read with the sqlite3 binary when it is present.
 DB_OPENCODE="$XDG_DATA/opencode/opencode.db"
 DB_GOOSE="$XDG_DATA/goose/sessions/sessions.db"
 DB_MUSE="$XDG_DATA/muse/session-index.db"
@@ -59,7 +56,7 @@ color_of() { # agent -> sets COLOR
   [ "$USE_COLOR" = 1 ] || COLOR=''
 }
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then USE_COLOR=1 C_DIM=$'\033[2m' C_WORK=$'\033[32m' C_RESET=$'\033[0m' MARK='●'
-else USE_COLOR=0 C_DIM='' C_WORK='' C_RESET='' MARK='▶'; fi   # a plain bullet says nothing without its colour
+else USE_COLOR=0 C_DIM='' C_WORK='' C_RESET='' MARK='▶'; fi
 
 resume_cmd() { # agent id file cwd -> sets RESUME ("" when the agent has no resume command)
   case $1 in
@@ -77,7 +74,6 @@ resume_cmd() { # agent id file cwd -> sets RESUME ("" when the agent has no resu
   esac
 }
 
-# ---------- portable helpers ----------
 NOW=$(date +%s)
 ago() { # seconds since epoch -> sets AGO to "3m ago" (no subshell: called per row)
   local d=$(( NOW - $1 ))
@@ -99,21 +95,13 @@ HIDDEN='[lsa:hidden]'   # title sentinel for files that are not sessions
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/lsa"
 CACHE="$CACHE_DIR/index-$VERSION.tsv"
 
-# ---------- the parser: "agent<TAB>path<TAB>mtime" in, "path<TAB>cwd<TAB>title[<TAB>id]" out ----------
-# One awk for every file. It reads the head of each transcript and stops as
-# soon as it has the directory and the first real prompt, so multi-megabyte
-# sessions cost the same as tiny ones. A session with no prompt yet is only
-# cached once it is ten minutes old, so a session being typed into stays fresh.
-# The optional fourth column replaces the id taken from the file name when
-# the agent needs the full id to resume (Gemini names files by a short one).
+# parser: agent path mtime -> path cwd title id (tab-separated; id overrides the filename)
 parse() {
   awk -F '\t' -v now="$NOW" -v HIDDEN="$HIDDEN" -v gemini_projects="$GEMINI_HOME/projects.json" '
-    # the JSON string that starts right after the opening quote, unescaped, capped
     function jstr(s,   out) {
       match(s, /^([^"\\]|\\.)*/); out = substr(s, 1, RLENGTH)
       gsub(/\\[ntr]/, " ", out); gsub(/\\"/, "\"", out); gsub(/\\\\/, "\\", out)
       return substr(out, 1, 300) }
-    # "key": "value" on this line, minified or pretty-printed
     function val(line, key) {
       if (match(line, "\"" key "\"[ \t]*:[ \t]*\"")) return jstr(substr(line, RSTART + RLENGTH, 2000))
       return "" }
@@ -127,37 +115,36 @@ parse() {
       close(gemini_projects) }
     { agent = $1; f = $2; cwd = ""; title = ""; id = ""; n = 0; cont = 0; pend = 0
       while ((getline line < f) > 0) {
-        if (++n > 60) break   # the prompt is in the first dozen records of every format
+        if (++n > 60) break
         if (agent == "claude" || agent == "qwen") {
           if (cwd == "") cwd = val(line, "cwd")
           if (title == "" && has(line, "type", "user")) title = text_of(line) }
         else if (agent == "codex") {
-          # Codex Desktop keeps its internal reviewer threads next to real sessions; not yours to resume
+          # internal reviewer threads share the session store
           if (n == 1 && has(line, "thread_source", "guardian_review")) { title = HIDDEN; break }
           if (cwd == "") cwd = val(line, "cwd")
           if (has(line, "type", "compacted")) cont = 1
           if (title == "" && has(line, "role", "user")) { t = text_of(line)
-            # Codex injects AGENTS.md, <environment_context> and, after compaction, history summaries
+            # skip injected context when choosing a title
             if (t !~ /^(<|# AGENTS\.md|The following is the Codex agent history)/) title = t } }
         else if (agent == "pi") {
           if (cwd == "") cwd = val(line, "cwd")
           if (title == "" && has(line, "role", "user")) title = text_of(line) }
-        else if (agent == "gemini") {   # line 1 is metadata with the full session id; messages follow
+        else if (agent == "gemini") {
           if (n == 1) { id = val(line, "sessionId")
             nparts = split(f, parts, "/"); cwd = gemini_dir[parts[nparts - 2]] }
           if (title == "" && has(line, "type", "user")) title = text_of(line) }
-        else if (agent == "cline") {    # <id>.json, pretty-printed: cwd and prompt are top-level keys
+        else if (agent == "cline") {
           if (cwd == "") cwd = val(line, "cwd")
           if (title == "") title = val(line, "prompt") }
         if (title != "" && (cwd != "" || agent == "gemini")) break }
       close(f)
       if (title == "" && cont) title = "(continued after compaction)"
+      # retry empty sessions for ten minutes before caching them
       if (title != "" || now - $3 > 600) { gsub(/\t/, " ", title); print f "\t" cwd "\t" title "\t" id } }'
 }
 
-# ---------- database-backed agents: one query each, rows in the final shape ----------
-# Prints "mtime<TAB>agent<TAB>db<TAB>id<TAB>directory<TAB>title". Titles are
-# the first prompt where the store has it. Skipped when sqlite3 is missing.
+# database rows: mtime agent db id directory title (tab-separated)
 db_rows() {
   command -v sqlite3 >/dev/null || return 0
   local db q
@@ -177,7 +164,7 @@ db_rows() {
     sqlite3 -batch -readonly -separator '	' "$DB_MUSE" "select updated_at_us/1000000, 'muse', '$DB_MUSE', session_id, coalesce(workspace_root, ''), $q
       from sessions where status = 'valid'" 2>/dev/null
   fi
-  for db in $DB_OPENCLAW_GLOB; do   # one store per OpenClaw agent; the directory column carries the session key
+  for db in $DB_OPENCLAW_GLOB; do
     [ -f "$db" ] || continue
     q=$(san "coalesce((select coalesce(json_extract(e.event_json, '\$.message.content[0].text'), json_extract(e.event_json, '\$.message.content')) from transcript_events e where e.session_id = w.session_id and json_extract(e.event_json, '\$.type') = 'message' and json_extract(e.event_json, '\$.message.role') = 'user' order by e.seq limit 1), nullif(w.display_name, ''), '')")
     sqlite3 -batch -readonly -separator '	' "$db" "select w.updated_at/1000, 'openclaw', '$db', w.session_id, substr(w.session_key, 7), $q
@@ -186,11 +173,6 @@ db_rows() {
   return 0
 }
 
-# ---------- every session: "mtime agent path id shortlen cwd title", newest first ----------
-# One find, one stat, one awk. The awk tags each file with its agent, takes
-# the id from the file name, shortens ids git-style (shortest unique prefix,
-# minimum 4) and joins the cache. Files missing from the cache are parsed
-# once and appended, then the join runs again.
 find_files() {
   local roots=() root agent
   while IFS=$'\t' read -r agent root; do [ -d "$root" ] && roots+=("$root"); done <<< "$ROOTS"
@@ -214,9 +196,9 @@ join_cache() { # missfile
         sub(/^rollout-[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}-/, "", base) }
       else if (agent == "pi") sub(/^[^_]*_/, "", base)
       else if (agent == "gemini") { if (f !~ /\/chats\/session-.*\.jsonl$/) next
-        sub(/\.jsonl$/, "", base); sub(/.*-/, "", base) }   # session-<date>-<id>
+        sub(/\.jsonl$/, "", base); sub(/.*-/, "", base) }
       else if (agent == "cline") { dir = f; sub(/\/[^\/]*$/, "", dir); sub(/.*\//, "", dir)
-        if (base != dir ".json") next }                     # sessions/<id>/<id>.json only
+        if (base != dir ".json") next }
       else if (base !~ /\.jsonl$/) next
       sub(/\.jsonl?$/, "", base)
       if (f in fullid) base = fullid[f]
@@ -231,6 +213,7 @@ join_cache() { # missfile
         else { print ts[i], ag[i], path[i], id[i], L, "-", "-"; print ag[i] "\t" path[i] "\t" ts[i] > miss } } }' "$CACHE" -
 }
 
+# sessions: mtime agent path id shortlen cwd title (tab-separated, newest first)
 sessions() {
   local files rows miss
   files=$(find_files; db_rows)
@@ -238,7 +221,7 @@ sessions() {
   mkdir -p "$CACHE_DIR"; [ -f "$CACHE" ] || : > "$CACHE"
   miss="$CACHE_DIR/miss.$$"
   rows=$(printf '%s\n' "$files" | join_cache "$miss")
-  if [ -s "$miss" ]; then   # first sight of some files: parse them once, then join again
+  if [ -s "$miss" ]; then
     parse < "$miss" >> "$CACHE"
     rows=$(printf '%s\n' "$files" | join_cache /dev/null)
   fi
@@ -246,17 +229,13 @@ sessions() {
   printf '%s\n' "$rows" | sort -rn | awk -F '\t' -v h="$HIDDEN" '$7 != h'
 }
 
-want_agent() { # agent
+want_agent() {
   [ -z "$AGENTS" ] && return 0
   case " $AGENTS " in *" $1 "*) return 0;; esac
   return 1
 }
 
-# ---------- which agents have a live process right now ----------
-# A transcript is written to while its agent works, so a session touched in
-# the last two minutes whose agent is running is shown as busy, with how long
-# the current turn has run in place of the age. One ps
-# call, only made when some session is that fresh.
+# busy heuristic: recent transcript activity and a running agent process
 WORKING_WINDOW=120
 running_agents() {
   ps -axo command= 2>/dev/null | awk '
@@ -269,12 +248,6 @@ running_agents() {
 }
 
 # ---------- the pane a session is already open in ----------
-# Every resume command carries the session id, so a session lsa opened is
-# found by looking for that id in the command lines under each pane. Two
-# agents also record where they are running, which finds sessions started by
-# hand as well: Claude Code names the pane in a file per live session, and
-# Codex holds its session lock open. Asked only when resuming. Nothing is
-# started here; a session that is not open in tmux is simply not found.
 agent_pane() { # id -> the pane an agent says it is in, or nothing
   local f
   for f in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/sessions/*.json; do
@@ -309,15 +282,10 @@ tmux_target() { # id -> pane id, or nothing
             while (q != "" && q != "1") { if (q in pane) { print pane[q]; exit } q = parent[q] } } }'
 }
 
-# ---------- how long the current turn has been running ----------
-# The timestamp of the last prompt you typed, from the tail of the transcript
-# (or one query for the database agents). Only asked for sessions already
-# known to be working, so a handful of reads at most. Prints epoch seconds,
-# or nothing when the format has no usable timestamp.
-since_ts() { # agent path id
+since_ts() { # agent path id -> last prompt epoch seconds, if available
   local agent=$1 f=$2 id=$3 pat q
   case $agent in
-    claude)  pat='"type":"user"' ;;   # tool results are also type user; they carry tool_result, prompts carry text
+    claude)  pat='"type":"user"' ;;   # also matches tool results; excluded below
     codex)   pat='"role":"user"' ;;
     pi)      pat='"role":"user"' ;;
     qwen)    pat='"type":"user"' ;;
@@ -334,7 +302,6 @@ since_ts() { # agent path id
                END { if (t != "") print int(t / 1000000) }'; return;;
     *) return 0;;
   esac
-  # last line matching pat that is a prompt (has a text part, is not a tool result), ISO timestamp -> epoch
   tail -c 262144 "$f" | awk -v pat="$pat" '
     function epoch(s,   y, m, d, H, M, S, a, yy, mm, days) {   # ISO-8601 UTC -> seconds, no mktime in BSD awk
       y = substr(s, 1, 4) + 0; m = substr(s, 6, 2) + 0; d = substr(s, 9, 2) + 0
@@ -356,7 +323,6 @@ busy_for() { # seconds -> sets BUSY like "2m" (no "ago": it is how long, not how
 }
 
 # ---------- list ----------
-# The index file is not always the transcript (Cline and Muse keep both).
 transcript_path() { # agent index-path id -> sets TRANSCRIPT and SHARED
   TRANSCRIPT=$2 SHARED=0
   case $1 in
@@ -366,8 +332,6 @@ transcript_path() { # agent index-path id -> sets TRANSCRIPT and SHARED
   esac
 }
 
-# Long rows: prefix, directory, coloured id, transcript path, title. Measure
-# only the displayed rows, keeping paths intact even in a narrow terminal.
 format_long() {
   awk -F '\t' '
     { prefix[NR] = $1; dir[NR] = $2; id[NR] = $3; path[NR] = $4; title[NR] = $5
@@ -379,7 +343,7 @@ format_long() {
       printf "%s %-*s %s%*s %-*s %s\n", prefix[i], dw, dir[i], id[i], iw - idlen[i], "", pw, path[i], title[i] }'
 }
 
-list_rows() { # dir cols
+list_rows() {
   local dir=$1 cols=$2 shown=0 i=-1 width ts agent f cwd id short n title when proj rows running='' since location
   rows=$(sessions)
   [ -n "$rows" ] || return 0
@@ -403,7 +367,7 @@ list_rows() { # dir cols
     proj=${cwd##*/}; [ -n "$proj" ] || proj='?'
     width=$(( cols - 4 - 9 - 9 - 22 - 10 - 4 ))
     [ "$width" -lt 20 ] && width=20
-    case $when in *"$MARK"*) ;; *) when=$(printf '%-8s' "$when");; esac   # the busy marker is padded to 8 already
+    case $when in *"$MARK"*) ;; *) when=$(printf '%-8s' "$when");; esac
     if [ "$LONG" = 1 ]; then
       transcript_path "$agent" "$f" "$id"
       location=$TRANSCRIPT
@@ -433,11 +397,10 @@ cmd_list() {
   return 0
 }
 
-# ---------- find one session by index or id prefix -> "agent<TAB>id<TAB>path<TAB>cwd" ----------
-find_one() { # index-or-prefix
+find_one() { # index or id prefix -> agent<TAB>id<TAB>path<TAB>cwd
   local prefix=$1 hits n
   case $prefix in
-    [0-9]|[0-9][0-9]|[0-9][0-9][0-9])   # an index: nth row of the newest-first list
+    [0-9]|[0-9][0-9]|[0-9][0-9][0-9])
       hits=$(sessions | awk -F '\t' -v OFS='\t' -v n="$((prefix+1))" 'NR == n { print $2, $4, $3, $6 }')
       [ -n "$hits" ] || { echo "lsa: no session at index $prefix" >&2; return 1; }
       printf '%s\n' "$hits"; return 0;;
@@ -451,67 +414,193 @@ find_one() { # index-or-prefix
   esac
 }
 
-# ---------- show: transcript as plain text ----------
-# turns "role<TAB>text" lines into the transcript layout
-as_turns() { awk -F '\t' '{ print "\n## " $1 "\n" $2 }'; }
+# ---------- show: recorded context and transcript as plain text ----------
+# shellcheck disable=SC2016
+SHOW_JQ='
+  def safe:
+    walk(if type == "object" then
+      del(.encrypted_content, .signature, .thoughtSignature, .thinkingSignature)
+      | if .type? == "base64" or has("mimeType") or has("mime_type") or .type? == "image" or .type? == "audio" or .type? == "redacted_thinking"
+        then (if has("data") then .data = "[binary data omitted]" else . end)
+          | if has("blob") then .blob = "[binary data omitted]" else . end else . end
+      else . end)
+    | walk(if type == "string" and startswith("data:") then "[embedded attachment omitted]" else . end);
+  def text:
+    if . == null then ""
+    elif type == "string" then safe
+    elif type == "array" then map(text) | map(select(length > 0)) | join("\n")
+    elif type != "object" then tostring
+    elif .type? == "tool_use" or .type? == "toolCall" then
+      "[tool: " + (.name // "unknown") + (if .id then " id=" + .id else "" end) + "] " + ((.input // .arguments // {}) | safe | tojson)
+    elif .type? == "tool_result" or .type? == "toolResult" then
+      "[result" + (if .tool_use_id // .toolCallId then " id=" + (.tool_use_id // .toolCallId) else "" end)
+      + (if .is_error // .isError then " error" else "" end) + "]\n" + (.content | text)
+    elif has("functionCall") then "[tool: " + .functionCall.name + "] " + (.functionCall.args | safe | tojson)
+    elif has("functionResponse") then "[result: " + .functionResponse.name + "]\n" + (.functionResponse.response | text)
+    elif .type? == "thinking" then "[thinking]\n" + (.thinking // .text // "")
+    elif has("text") then .text | text
+    elif .type? == "input_image" or .type? == "image" or .type? == "image_url" or .type? == "document"
+      or has("inlineData") or has("fileData") then "[attachment] " + (safe | tojson)
+    elif has("content") then .content | text
+    else safe | tojson end;
+  def turn($role; $body):
+    ($body | text) as $t | select($t | length > 0) | "\n## " + $role + "\n" + $t;
+  def codex_item:
+    if .type == "message" then turn(.role; .content)
+    elif .type == "function_call" or .type == "custom_tool_call" then
+      turn("assistant"; "[tool: " + .name + " id=" + (.call_id // .id // "unknown") + "]\n" + ((.arguments // .input) | text))
+    elif .type == "function_call_output" or .type == "custom_tool_call_output" then
+      turn("tool"; "[result id=" + (.call_id // "unknown") + "]\n" + (.output | text))
+    elif .type == "reasoning" then turn("reasoning summary"; [.summary, .content])
+    elif .type == "compaction" then turn("compaction"; "[Compacted state is encrypted; only recorded text can be exported.]")
+    else turn(.type // "event"; .) end;
+'
 
-# shellcheck disable=SC2016  # the jq filters are meant to stay single-quoted
-cmd_show() {
-  local agent id f cwd filter
-  IFS=$'\t' read -r agent id f cwd < <(find_one "$1")
-  [ "$cwd" = - ] && cwd=''
+# shellcheck disable=SC2016
+show_session() ( # agent id index-path cwd; subshell confines pipefail
+  set -o pipefail
+  local agent=$1 id=$2 f=$3 cwd=$4 filter
+  command -v jq >/dev/null || { echo "lsa: 'show' needs jq (brew install jq / apt install jq)" >&2; return 1; }
   case $agent in
-    opencode) sqlite3 -batch -readonly -separator '	' "$f" "select json_extract(m.data, '\$.role'), replace(json_extract(p.data, '\$.text'), char(10), ' ')
-        from message m join part p on p.message_id = m.id where m.session_id = '$id' and json_extract(p.data, '\$.type') = 'text'
-        order by m.time_created, p.time_created" | as_turns; return;;
-    goose) sqlite3 -batch -readonly -separator '	' "$f" "select role, replace(json_extract(content_json, '\$[0].text'), char(10), ' ')
-        from messages where session_id = '$id' and json_extract(content_json, '\$[0].text') is not null
-        and json_extract(content_json, '\$[0].text') not like '<turn-context>%' order by id" | as_turns; return;;
-    muse) command -v jq >/dev/null || { echo "lsa: 'show' needs jq (brew install jq / apt install jq)" >&2; exit 1; }
-      f=$(sqlite3 -batch -readonly "$f" "select session_log_path from sessions where session_id = '$id'")
-      jq -r 'select(.payload_type == "runtime.session") | .payload.event
-        | if .kind == "started" and (.prompt // "") != "" then "\n## user\n" + .prompt
-          elif .kind == "assistant_message_committed" then "\n## assistant\n" + .text else empty end' "$f"; return;;
-    openclaw) command -v jq >/dev/null || { echo "lsa: 'show' needs jq (brew install jq / apt install jq)" >&2; exit 1; }
-      sqlite3 -batch -readonly "$f" "select event_json from transcript_events where session_id = '$id' and json_extract(event_json, '\$.type') = 'message' order by seq" \
-        | jq -r '.message as $m | ($m.content | if type=="string" then [.] else map(.text // empty) end) as $p | select($p|length>0) | "\n## " + $m.role + "\n" + ($p|join("\n"))'
-      return;;
+    opencode)
+      sqlite3 -batch -readonly "$f" "select json_object('role', json_extract(m.data, '\$.role'), 'part', json(p.data))
+        from message m join part p on p.message_id = m.id where m.session_id = '$id'
+        order by m.time_created, m.id, p.time_created, p.id" |
+        jq -r "$SHOW_JQ"'select(.part.type != "step-start" and .part.type != "step-finish")
+          | turn(.role; if .part.type == "tool" then
+              "[tool: " + .part.tool + " id=" + (.part.callID // "unknown") + "]\n" + (.part.state | del(.output, .error) | safe | tojson) + "\n" + ([.part.state.output, .part.state.error] | text)
+            else .part end)'; return;;
+    goose)
+      sqlite3 -batch -readonly "$f" "select json_object('role', role, 'content', json(content_json))
+        from messages where session_id = '$id' order by id" |
+        jq -r "$SHOW_JQ"'turn(.role; .content)'; return;;
+    muse)
+      f=$(sqlite3 -batch -readonly "$f" "select session_log_path from sessions where session_id = '$id'") || return
+      filter='select(.payload_type == "runtime.session") | .payload.event
+        | if .kind == "started" then turn("user"; .prompt)
+          elif .kind == "assistant_message_committed" then turn("assistant"; .text)
+          elif (.kind // "" | test("tool|compact|context")) then turn(.kind; .) else empty end';;
+    openclaw)
+      sqlite3 -batch -readonly "$f" "select event_json from transcript_events where session_id = '$id' order by seq" |
+        jq -r "$SHOW_JQ"'if .type == "message" then turn(.message.role; .message.content)
+          elif .type == "compaction" or .type == "branch_summary" then turn(.type; .summary)
+          else empty end'; return;;
     claude) filter='
-      select(.type=="user" or .type=="assistant") | .message as $m
-      | ($m.content | if type=="string" then [.] else map(
-          if .type=="text" then .text
-          elif .type=="tool_use" then "[tool: " + .name + "] " + (.input|tostring)
-          elif .type=="tool_result" then "[result] " + (.content|tostring)
-          else empty end) end) as $parts
-      | select($parts|length>0)
-      | "\n## " + $m.role + "\n" + ($parts|join("\n"))';;
+      if .type == "user" or .type == "assistant" then turn(.message.role; .message.content)
+      elif .type == "attachment" then
+        turn("context (" + (.attachment.type // "attachment") + ")";
+          if (.rendered // [] | length) > 0 then .rendered else .attachment end)
+      elif .type == "system" then
+        if .subtype == "compact_boundary" then turn("compaction"; .compactMetadata // .content // "Context compacted.")
+        else turn("system (" + (.subtype // "message") + ")"; .content) end
+      elif .type == "summary" then turn("summary"; .summary)
+      else empty end';;
     codex) filter='
-      select(.type=="response_item" and .payload.type=="message")
-      | .payload as $m
-      | select($m.role!="developer")
-      | ($m.content|map(.text // empty)|join("\n")) as $t
-      | select($t|length>0)
-      | select($t|test("^(<|# AGENTS.md)")|not)
-      | "\n## " + $m.role + "\n" + $t';;
+      if .type == "response_item" then .payload | codex_item
+      elif .type == "session_meta" then turn("session context"; .payload | {cwd, git} | with_entries(select(.value != null))),
+        turn("recorded instructions"; .payload.base_instructions.text // .payload.base_instructions)
+      elif .type == "turn_context" or .type == "world_state" then turn(.type; .payload)
+      elif .type == "compacted" then
+        turn("compaction summary"; .payload.message),
+        (.payload.replacement_history[]? | codex_item),
+        turn("retained context"; .payload.retained_context)
+      elif .type == "event_msg" and (.payload.type == "turn_aborted" or .payload.type == "error") then turn(.payload.type; .payload)
+      else empty end';;
     pi) filter='
-      select(.type=="message") | .message as $m
-      | ($m.content | if type=="string" then [.] else map(
-          if .type=="text" then .text
-          elif .type=="toolCall" then "[tool: " + .name + "] " + (.arguments|tostring)
-          elif .type=="toolResult" then "[result] " + (.content|tostring)
-          else empty end) end) as $parts
-      | select($parts|length>0)
-      | "\n## " + $m.role + "\n" + ($parts|join("\n"))';;
+      if .type == "message" then .message as $m
+        | if $m.role == "toolResult" then turn("tool"; "[result: " + ($m.toolName // "unknown") + " id=" + ($m.toolCallId // "unknown") + (if $m.isError then " error" else "" end) + "]\n" + ($m.content | text))
+          elif $m.role == "bashExecution" then turn("bash"; $m | {command, output, exitCode, cancelled, truncated, fullOutputPath})
+          else turn($m.role; $m.content) end
+      elif .type == "session" then turn("session context"; {cwd, parentSession} | with_entries(select(.value != null)))
+      elif .type == "compaction" or .type == "branch_summary" then turn(.type; .summary)
+      elif .type == "custom_message" then turn("context (" + (.customType // "custom") + ")"; .content)
+      else empty end';;
     qwen) filter='
-      select(.type=="user" or .type=="assistant") | "\n## " + .type + "\n" + (.message.parts|map(.text // empty)|join("\n"))';;
+      if .type == "user" or .type == "assistant" then turn(.type; .message.parts)
+      elif .type == "system" and (.subtype // "" | test("compact|summary")) then turn(.subtype; .systemPayload)
+      else empty end';;
     gemini) filter='
-      select(.type=="user" or .type=="gemini") | "\n## " + .type + "\n" + (.content | if type=="string" then . else map(.text // empty)|join("\n") end)';;
+      if .type == "user" or .type == "gemini" or .type == "system" then
+        turn(.type; [.content, (.toolCalls[]? | "[tool: " + (.name // "unknown") + "]\n" + (safe | tojson))])
+      else empty end';;
     cline) f="${f%.json}.messages.json"; filter='
-      .messages[] | "\n## " + .role + "\n" + (.content|map(.text // empty)|join("\n") | sub("^<user_input[^>]*>"; "") | sub("</user_input>$"; ""))';;
-    *) echo "lsa: show does not know the $agent format yet; the session is at" >&2; echo "$f" >&2; exit 1;;
+      .messages[] | turn(.role; (.content | text | sub("^<user_input[^>]*>"; "") | sub("</user_input>$"; "")))';;
+    *) echo "lsa: show does not know the $agent format yet; the session is at" >&2; echo "$f" >&2; return 1;;
   esac
-  command -v jq >/dev/null || { echo "lsa: 'show' needs jq (brew install jq / apt install jq)" >&2; exit 1; }
-  jq -r "$filter" "$f"
+  jq -r "$SHOW_JQ$filter" "$f"
+)
+
+cmd_show() {
+  local hit agent id f cwd
+  hit=$(find_one "$1") || return
+  IFS=$'\t' read -r agent id f cwd <<< "$hit"
+  show_session "$agent" "$id" "$f" "$cwd"
+}
+
+handoff_codex() (
+  local directory=$1 snapshot=$2 server='' reply step id
+  umask 077
+  mkfifo "$directory/input" "$directory/output" || return
+  trap 'exec 3>&- 4<&-; if [ -n "$server" ]; then kill "$server" 2>/dev/null || :; wait "$server" 2>/dev/null || :; fi; rm -f "$directory/input" "$directory/output"' EXIT
+  exec 3<> "$directory/input" || return
+  codex app-server < "$directory/input" > "$directory/output" 3>&- 2> "$directory/codex.log" &
+  server=$!
+  exec 4< "$directory/output" || return
+  printf '{"id":1,"method":"initialize","params":{"clientInfo":{"name":"lsa","version":"%s"}}}\n' "$VERSION" >&3 || return
+  while IFS= read -r -t 30 reply <&4; do
+    step=$(jq -r 'if .error then "error: " + .error.message else (.id // "" | tostring) end' <<< "$reply") || return
+    case $step in
+      1)
+        printf '{"method":"initialized","params":{}}\n' >&3 || return
+        jq -cn --arg cwd "$PWD" '{id:2,method:"thread/start",params:{cwd:$cwd}}' >&3 || return;;
+      2)
+        id=$(jq -er '.result.thread.id' <<< "$reply") || return
+        jq -cn --arg id "$id" --rawfile text "$snapshot" \
+          '{id:3,method:"thread/inject_items",params:{threadId:$id,items:[{type:"message",role:"user",content:[{type:"input_text",text:$text}]}]}}' >&3 || return;;
+      3)
+        exec 3>&-
+        wait "$server" || return
+        server=''
+        printf '%s\n' "$id"
+        return;;
+      error:*) echo "lsa: Codex could not load the transcript ($step)" >&2; return 1;;
+    esac
+  done
+  echo "lsa: Codex did not finish loading the transcript; see $directory/codex.log" >&2
+  return 1
+)
+
+cmd_handoff() {
+  local source=$1 hit agent id f cwd target=$2 directory snapshot prompt thread
+  case $target in
+    claude|codex|pi) ;;
+    *) echo "lsa: handoff supports claude, codex or pi (got '$target')" >&2; return 2;;
+  esac
+  shift 2
+  command -v "$target" >/dev/null || { echo "lsa: '$target' is not installed or not on PATH" >&2; return 1; }
+  hit=$(find_one "$source") || return
+  IFS=$'\t' read -r agent id f cwd <<< "$hit"
+  if [ "$agent" != openclaw ] && [ -n "$cwd" ] && [ "$cwd" != - ]; then
+    [ -d "$cwd" ] || { echo "lsa: session directory no longer exists: $cwd" >&2; return 1; }
+  else cwd=$PWD; fi
+  directory=$(umask 077; mkdir -p "$CACHE_DIR/handoffs" && mktemp -d "$CACHE_DIR/handoffs/handoff.XXXXXX") || return
+  directory=$(cd "$directory" && pwd -P) || return
+  snapshot="$directory/transcript.md"
+  (
+    umask 077
+    printf '# Agent handoff\n\nSource agent: %s\nSession: %s\nProject: %s\nSource store: %s\n\n' "$agent" "$id" "$cwd" "$f" > "$snapshot"
+    show_session "$agent" "$id" "$f" "$cwd" >> "$snapshot"
+  ) || { rm -rf "$directory"; echo "lsa: could not export the session; handoff cancelled" >&2; return 1; }
+  prompt='Continue this conversation from where it left off.'
+  cd "$cwd" || return
+  printf 'lsa: handing %s session %s to %s\nlsa: saved context: %s\n' "$agent" "$id" "$target" "$snapshot" >&2
+  case $target in
+    claude) exec claude "$@" "$prompt" < "$snapshot";;
+    pi) exec pi "$@" "@$snapshot" "$prompt";;
+    codex)
+      thread=$(handoff_codex "$directory" "$snapshot") || return
+      exec codex resume "$thread" "$@" "$prompt";;
+  esac
 }
 
 cmd_path() {
@@ -527,8 +616,6 @@ cmd_resume() {
   [ "$cwd" = - ] && cwd=''
   resume_cmd "$agent" "$id" "$f" "$cwd"
   [ -n "$RESUME" ] || { echo "lsa: $agent has no resume command; the session is at" >&2; echo "$f" >&2; exit 1; }
-  # already open in a tmux pane: go back to it rather than start a second
-  # agent on the same transcript
   local target session
   target=$(tmux_target "$id")
   if [ -n "$target" ]; then
@@ -547,7 +634,8 @@ cmd_resume() {
 # ---------- args ----------
 ALL=0 LONG=0 LIMIT=0 AGENTS='' DIR=''
 case ${1:-} in
-  show|path|resume) [ $# -ge 2 ] || { usage >&2; exit 2; }; "cmd_$1" "$2"; exit;;
+  handoff) [ $# -ge 3 ] || { usage >&2; exit 2; }; shift; cmd_handoff "$@"; exit;;
+  show|path|resume) [ $# -eq 2 ] || { usage >&2; exit 2; }; "cmd_$1" "$2"; exit;;
 esac
 while [ $# -gt 0 ]; do
   case $1 in

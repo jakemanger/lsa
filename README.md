@@ -3,7 +3,7 @@
 
 `ls` for agent sessions. List every session from every coding agent on the
 machine, newest first. Resume the conversation, watch it work in the
-background, print it or pipe it to another agent.
+background, print it or continue it in another agent.
 
 ![lsa listing sessions](demo/list.gif)
 
@@ -27,7 +27,7 @@ printf '\nunalias lsa 2>/dev/null\n' >> ~/.zshrc && source ~/.zshrc
 ```
 
 Needs bash 3.2 or later, grep, sed, awk, find, stat and ps. `lsa show` also
-needs `jq`, and the database-backed agents need `sqlite3`.
+needs `jq` 1.6 or later, and the database-backed agents need `sqlite3`.
 
 ### Package managers
 
@@ -96,23 +96,24 @@ key instead.
 
 ## Why a list
 
-Tools like herdr and Claude Squad run the agents for you, a pane each, with a
-live view of which one is blocked. `lsa` runs nothing of its own. It reads the
-transcripts the agents leave behind, so a session is there whether it finished
-an hour ago or is still going in a pane.
+Tools like herdr, Claude Squad and cmux are new terminal multiplexers built
+for agents: a pane each, with a live view of which one is blocked. The part
+most people actually want is to get back into a session and leave it
+running. That is already possible with simple Unix tools: tmux keeps the
+agents running, and `lsa` finds and resumes their sessions.
+
+`lsa` aims to follow the Unix philosophy: do one job well, and work with
+other programs through text streams. Its output is plain text you can pipe
+to `grep`, `less` or `awk`.
 
 If all you wanted from a session manager was to find the conversation you were
 in and pick it up again, this is one that is one more letter than `ls`.
 
-**Already use tmux?** Then `lsa resume 0` attaches to the pane the session is
-already running in, rather than starting a second agent on the same transcript,
-and `ctrl-b d` leaves it running in the background. Want to check on it? Run
-`lsa` to see whether it is still working, or `lsa show 0` to read what it has
-done since.
-
-That is the part of an agent multiplexer like herdr, Claude Squad or cmux that
-most people actually want. You can achieve the same thing with simple unix
-tools: `lsa` and tmux.
+**Already use tmux?** `lsa resume 0` attaches to the pane the session is
+already running in rather than starting a second agent on the same
+transcript, and `ctrl-b d` leaves it running in the background. To check on
+it, `lsa` shows whether it is still working and `lsa show 0` prints what it
+has done since.
 
 ## Use
 
@@ -127,13 +128,13 @@ lsa show 659c       print a transcript as plain text
 lsa path 659c       print where the transcript lives
 lsa resume 659c     reopen it in its own agent
 lsa resume 0        the same by index, like tmux attach -t 0
+lsa handoff 0 codex continue the newest session in Codex
 ```
 
 ![lsa picking a session](demo/pick.gif)
 
-A session whose transcript changed in the last two minutes, and whose agent
-has a live process, shows a green `●` and how long the current turn has been
-running, counted from the last prompt you typed, in place of its age:
+A session whose agent is still working on a turn shows a green `●` and how
+long that turn has been running in place of its age:
 
 ```
   0 claude   ● 2m      3e1f    add a --dry-run flag to the deploy script
@@ -145,33 +146,38 @@ Indexes stay the same when filtering.
 
 Any unique prefix of the full id also works.
 
-Pipe a transcript to a pager or search it:
+Page, search or save a transcript:
 
 ```
 lsa show 659c | less
 lsa show 659c | grep -n 'TODO'
+lsa show 659c > transcript.txt
 ```
 
 ### Switch agents
 
-Pick a session from `lsa`, then continue it in Claude from its project directory:
+Continue a session in Claude, Codex or Pi:
 
 ```sh
-lsa show 659c | claude "Continue this conversation from where it left off."
+lsa handoff 0 codex
+lsa handoff 659c claude
+lsa handoff 659c pi
 ```
 
-For Codex or Pi, pass the transcript as the opening prompt:
+`handoff` starts the new agent in the same project directory with the saved
+conversation and tool results. The agent must be installed and signed in.
+
+You can also pipe a session from any supported agent into another agent's
+non-interactive mode. Run these from the session's project directory:
 
 ```sh
-codex "Continue this conversation: $(lsa show 659c)"
-pi "Continue this conversation: $(lsa show 659c)"
+lsa show 659c | claude -p "Continue this conversation from where it left off."
+lsa show 659c | pi -p "Continue this conversation from where it left off."
 ```
 
-To send just the last 200 lines:
-
-```sh
-lsa show 659c | tail -n 200 | claude "Continue this conversation."
-```
+These examples run non-interactively. `handoff` loads the transcript into
+the new agent's context and opens an interactive session so you can keep
+chatting.
 
 ## Where it looks
 
@@ -195,13 +201,14 @@ agents are silently skipped.
 A session's directory and first prompt never change, so they are cached in
 `~/.cache/lsa/` after the first run. Listing is then one directory scan,
 one `stat` and one `awk`, about the cost of `ls -l` on the same files.
-Delete the cache directory if you ever want a rescan. Nothing else is
-written, nothing leaves the machine.
+Delete the index cache if you ever want a rescan. Listing and showing sessions
+only read local data. `handoff` also saves a local snapshot and launches the
+destination agent.
 
 ## Adding an agent
 
-Open an issue with the agent's name, version and a sample session file.
-Pull requests with support and a test are welcome too.
+Open an issue with the agent's name and where it keeps its sessions. Pull
+requests welcome.
 
 ## Development
 
