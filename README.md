@@ -227,6 +227,10 @@ demo/record.sh   re-record the gifs (asciinema + agg, Goose over ollama,
                  and an authenticated Claude Code for the handoff)
 ```
 
+## Sponsor
+
+If `lsa` saves you time, you can [sponsor its development](https://github.com/sponsors/jakemanger).
+
 ## Licence
 
 MIT.
