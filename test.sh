@@ -127,6 +127,57 @@ check "codex skips injected prompts" "add subtitles" "$(printf '%s\n' "$out" | g
 check "qwen title" "write a haiku about awk" "$(printf '%s\n' "$out" | grep ' qwen ' | title_here)"
 check "cline title" "make the sidebar collapsible" "$(printf '%s\n' "$out" | grep ' cline ' | title_here)"
 check "gemini title, directory via projects.json" "explain this regex" "$(printf '%s\n' "$out" | grep ' gemini ' | title_here)"
+# GEMINI_CLI_HOME stands in for the home directory; gemini keeps .gemini inside it
+mkdir -p "$tmp/gemini-home"; cp -R "$tmp/.gemini" "$tmp/gemini-home/.gemini"
+check "GEMINI_CLI_HOME replaces the home, not .gemini" "explain this regex" "$(GEMINI_CLI_HOME="$tmp/gemini-home" bash "$LSA" -a -t gemini | title_of)"
+# pi can keep every session in one flat folder, set by env or an absolute setting
+mkdir -p "$tmp/pi-flat" "$tmp/pi-agent"
+sed 's/hello pi/pi flat session/' "$tmp"/.pi/agent/sessions/x/*cccc3333*.jsonl > "$tmp/pi-flat/2026-09-22T09-00-00-000Z_cccc3333-0000-0000-0000-000000000000.jsonl"
+check "PI_CODING_AGENT_SESSION_DIR is where pi sessions are" "pi flat session" "$(PI_CODING_AGENT_SESSION_DIR="$tmp/pi-flat" bash "$LSA" -a -t pi | title_of)"
+printf '{\n  "defaultProvider": "anthropic",\n  "sessionDir": "%s"\n}\n' "$tmp/pi-flat" > "$tmp/pi-agent/settings.json"
+check "pi's sessionDir setting is where pi sessions are" "pi flat session" "$(PI_CODING_AGENT_DIR="$tmp/pi-agent" bash "$LSA" -a -t pi | title_of)"
+printf '{ "sessionDir": ".pi/sessions" }\n' > "$tmp/pi-agent/settings.json"
+check "a relative sessionDir, resolved per project by pi, is left alone" "" "$(PI_CODING_AGENT_DIR="$tmp/pi-agent" bash "$LSA" -a -t pi | title_of)"
+# each override moves the store; the copy's prompt differs, so only the moved one matches
+relocate() { # src dst old new: copy a store and change one prompt in its text files
+  mkdir -p "$(dirname "$2")"; cp -R "$1" "$2"
+  find "$2" -name '*.json*' -exec sed -i.bak "s/$3/$4/" {} + ; find "$2" -name '*.bak' -delete
+}
+relocate "$tmp/.qwen" "$tmp/qwen-home" 'write a haiku about awk' 'qwen home session'
+check "QWEN_HOME moves qwen's sessions" "qwen home session" "$(QWEN_HOME="$tmp/qwen-home" bash "$LSA" -a -t qwen | title_of)"
+relocate "$tmp/.qwen" "$tmp/qwen-runtime" 'write a haiku about awk' 'qwen runtime session'
+check "QWEN_RUNTIME_DIR wins over QWEN_HOME" "qwen runtime session" "$(QWEN_HOME="$tmp/qwen-home" QWEN_RUNTIME_DIR="$tmp/qwen-runtime" bash "$LSA" -a -t qwen | title_of)"
+check "a relative QWEN_HOME is left alone" "write a haiku about awk" "$(QWEN_HOME=qwen-home bash "$LSA" -a -t qwen | title_of)"
+chats=$(dirname "$(ls "$tmp"/qwen-home/projects/*/chats/*.jsonl)")
+mkdir -p "$chats/archive" "$chats/../workflows/run1"
+for copy in eeee5555-0000-0000-0000-000000000000.ledger.jsonl archive/ffff0000-0000-0000-0000-000000000000.jsonl ../workflows/run1/journal.jsonl; do
+  cp "$chats/eeee5555-0000-0000-0000-000000000000.jsonl" "$chats/$copy"
+done
+check "qwen ledgers, archives and journals are not sessions" "1" "$(QWEN_HOME="$tmp/qwen-home" bash "$LSA" -a -t qwen | grep -c .)"
+relocate "$tmp/.cline" "$tmp/cline-dir" 'make the sidebar collapsible' 'cline dir session'
+check "CLINE_DIR moves cline's sessions" "cline dir session" "$(CLINE_DIR="$tmp/cline-dir" bash "$LSA" -a -t cline | title_of)"
+relocate "$tmp/.cline/data" "$tmp/cline-data" 'make the sidebar collapsible' 'cline data session'
+check "CLINE_DATA_DIR moves cline's sessions" "cline data session" "$(CLINE_DIR="$tmp/cline-dir" CLINE_DATA_DIR="$tmp/cline-data" bash "$LSA" -a -t cline | title_of)"
+relocate "$tmp/.cline/data/sessions" "$tmp/cline-sessions" 'make the sidebar collapsible' 'cline sessions session'
+check "CLINE_SESSION_DATA_DIR moves cline's sessions" "cline sessions session" "$(CLINE_SESSION_DATA_DIR="$tmp/cline-sessions" bash "$LSA" -a -t cline | title_of)"
+if [ $have_sqlite = 1 ]; then
+  mkdir -p "$tmp/moved"
+  cp "$tmp/.local/share/opencode/opencode.db" "$tmp/moved/opencode.db"
+  sqlite3 "$tmp/moved/opencode.db" "update session set title = 'opencode moved session'"
+  check "OPENCODE_DB moves opencode's database" "opencode moved session" "$(OPENCODE_DB="$tmp/moved/opencode.db" bash "$LSA" -a -t opencode | title_of)"
+  cp "$tmp/moved/opencode.db" "$tmp/.local/share/opencode/other.db"
+  check "a bare OPENCODE_DB name is in opencode's data folder" "opencode moved session" "$(OPENCODE_DB=other.db bash "$LSA" -a -t opencode | title_of)"
+  rm "$tmp/.local/share/opencode/other.db"
+  mkdir -p "$tmp/goose-root/data/sessions"
+  cp "$tmp/.local/share/goose/sessions/sessions.db" "$tmp/goose-root/data/sessions/sessions.db"
+  sqlite3 "$tmp/goose-root/data/sessions/sessions.db" "update messages set content_json = replace(content_json, 'honk at the tests', 'goose moved session')"
+  check "GOOSE_PATH_ROOT moves goose's database" "goose moved session" "$(GOOSE_PATH_ROOT="$tmp/goose-root" bash "$LSA" -a -t goose | title_of)"
+  cp -R "$tmp/.openclaw" "$tmp/openclaw-state"
+  sqlite3 "$tmp/openclaw-state/agents/main/agent/openclaw-agent.sqlite" "update transcript_events set event_json = replace(event_json, 'what is on my calendar', 'openclaw moved session')"
+  check "OPENCLAW_STATE_DIR moves openclaw's data" "openclaw moved session" "$(OPENCLAW_STATE_DIR="$tmp/openclaw-state" bash "$LSA" -a -t openclaw | title_of)"
+  mkdir -p "$tmp/openclaw-home"; cp -R "$tmp/openclaw-state" "$tmp/openclaw-home/.openclaw"
+  check "OPENCLAW_HOME replaces the home openclaw uses" "openclaw moved session" "$(OPENCLAW_HOME="$tmp/openclaw-home" bash "$LSA" -a -t openclaw | title_of)"
+fi
 check "cache written" "1" "$([ -s "$tmp/.cache/lsa/index-$(bash "$LSA" -V | cut -d' ' -f2).tsv" ] && echo 1)"
 check "second run from cache matches" "$(bash "$LSA" -a)" "$(bash "$LSA" -a)"
 
@@ -476,6 +527,11 @@ SH
   check "gemini session file avoids the id suffix gemini's cleanup deletes" no \
     "$(contains "-$(head -n 1 "$gemini_file" | jq -r '.sessionId[0:8]').jsonl" "$gemini_file")"
   find "$tmp/.claude/projects" -name '*.jsonl' ! -name 'aaaa1111-*' ! -name 'agent-*' -newer "$tmp/.claude/projects/x/agent-sidechain.jsonl" -delete
+
+  HANDOFF_HOME=$(handoff_home pi)
+  handed=$(PI_CODING_AGENT_SESSION_DIR="$HANDOFF_HOME/flat" handoff_output pi aaaa pi)
+  check "handoff to pi writes into a flat PI_CODING_AGENT_SESSION_DIR" "$HANDOFF_HOME/flat" "$(dirname "$(arg 2 <<< "$handed")")"
+  check "that pi session has the conversation" yes "$(contains 'fix the "login" bug' "$(native_text pi "$handed")")"
 
   HANDOFF_HOME=$(handoff_home pi)
   mkdir -p "$HANDOFF_HOME/.pi/agent/sessions/x"

@@ -186,14 +186,17 @@ These examples run non-interactively; use `handoff` to keep chatting.
 |-------------|-------------------------------------------------------------|-----------------------|
 | Claude Code | `~/.claude/projects/*/*.jsonl`                              | `CLAUDE_CONFIG_DIR`   |
 | Codex       | `~/.codex/sessions/YYYY/MM/DD/*.jsonl`                      | `CODEX_HOME`          |
-| pi          | `~/.pi/agent/sessions/*/*.jsonl`                            | `PI_CODING_AGENT_DIR` |
-| Qwen Code   | `~/.qwen/projects/*/chats/*.jsonl`                          | |
+| pi          | `~/.pi/agent/sessions/*/*.jsonl`                            | `PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR`, `sessionDir` |
+| Qwen Code   | `~/.qwen/projects/*/chats/*.jsonl`                          | `QWEN_HOME`, `QWEN_RUNTIME_DIR` |
 | Gemini CLI  | `~/.gemini/tmp/*/chats/session-*.jsonl` + `projects.json`   | `GEMINI_CLI_HOME` |
-| Cline       | `~/.cline/data/sessions/*/*.json`                           | |
-| OpenCode    | `~/.local/share/opencode/opencode.db`                       | `XDG_DATA_HOME` |
-| Goose       | `~/.local/share/goose/sessions/sessions.db`                 | `XDG_DATA_HOME` |
+| Cline       | `~/.cline/data/sessions/*/*.json`                           | `CLINE_DIR`, `CLINE_DATA_DIR`, `CLINE_SESSION_DATA_DIR` |
+| OpenCode    | `~/.local/share/opencode/opencode.db`                       | `XDG_DATA_HOME`, `OPENCODE_DB` |
+| Goose       | `~/.local/share/goose/sessions/sessions.db`                 | `XDG_DATA_HOME`, `GOOSE_PATH_ROOT` |
 | Muse Code   | `~/.local/share/muse/session-index.db`                      | `XDG_DATA_HOME` |
-| OpenClaw    | `~/.openclaw/agents/*/agent/openclaw-agent.sqlite`          | |
+| OpenClaw    | `~/.openclaw/agents/*/agent/openclaw-agent.sqlite`          | `OPENCLAW_STATE_DIR`, `OPENCLAW_HOME` |
+
+These are the same on macOS and Linux. Overrides are followed when they are
+absolute paths; a relative one depends on the directory the agent starts in.
 
 The last four are SQLite databases and are read with the `sqlite3` binary
 that ships with macOS and most Linux distributions; without it those

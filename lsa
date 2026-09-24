@@ -3,7 +3,7 @@
 # https://github.com/jakemanger/lsa
 set -eu
 
-VERSION="0.1.0"
+VERSION="0.1.1"
 
 usage() {
   cat <<'EOF'
@@ -31,18 +31,37 @@ EOF
 }
 
 # ---------- where each agent keeps its sessions ----------
+# agents read their overrides relative to whatever directory they start in, so
+# only absolute (or ~) ones can be followed from here
+abs_dir() { # name value -> sets name to value if it is absolute or starts with ~, else to ""
+  case ${2:-} in /*) printf -v "$1" '%s' "$2";; \~|\~/*) printf -v "$1" '%s' "$HOME${2#\~}";; *) printf -v "$1" '%s' '';; esac
+}
 XDG_DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
-GEMINI_HOME="${GEMINI_CLI_HOME:-$HOME/.gemini}"
+GEMINI_HOME="${GEMINI_CLI_HOME:-$HOME}/.gemini"   # GEMINI_CLI_HOME replaces ~, not ~/.gemini
+# pi keeps sessions in one folder per project, unless PI_CODING_AGENT_SESSION_DIR or
+# an absolute sessionDir setting puts them all in one flat folder
+PI_AGENT="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+abs_dir PI_SESSIONS "${PI_CODING_AGENT_SESSION_DIR:-$(sed -n 's/.*"sessionDir"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$PI_AGENT/settings.json" 2>/dev/null | head -n 1)}"
+PI_FLAT=1; [ -n "$PI_SESSIONS" ] || { PI_SESSIONS="$PI_AGENT/sessions"; PI_FLAT=0; }
+abs_dir QWEN_BASE "${QWEN_RUNTIME_DIR:-}"; [ -n "$QWEN_BASE" ] || abs_dir QWEN_BASE "${QWEN_HOME:-}"
+QWEN_BASE=${QWEN_BASE:-$HOME/.qwen}
+abs_dir CLINE_DATA "${CLINE_DATA_DIR:-}"; abs_dir CLINE_HOME "${CLINE_DIR:-}"
+CLINE_DATA=${CLINE_DATA:-${CLINE_HOME:-$HOME/.cline}/data}
+abs_dir CLINE_SESSIONS "${CLINE_SESSION_DATA_DIR:-}"; CLINE_SESSIONS=${CLINE_SESSIONS:-$CLINE_DATA/sessions}
 ROOTS="claude	${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects
 codex	${CODEX_HOME:-$HOME/.codex}/sessions
-pi	${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/sessions
+pi	$PI_SESSIONS
 gemini	$GEMINI_HOME/tmp
-qwen	$HOME/.qwen/projects
-cline	$HOME/.cline/data/sessions"
-DB_OPENCODE="$XDG_DATA/opencode/opencode.db"
-DB_GOOSE="$XDG_DATA/goose/sessions/sessions.db"
+qwen	$QWEN_BASE/projects
+cline	$CLINE_SESSIONS"
+case ${OPENCODE_DB:-} in   # a name is relative to opencode's data folder
+  /*) DB_OPENCODE=$OPENCODE_DB;; ''|:memory:) DB_OPENCODE="$XDG_DATA/opencode/opencode.db";; *) DB_OPENCODE="$XDG_DATA/opencode/$OPENCODE_DB";;
+esac
+abs_dir GOOSE_ROOT "${GOOSE_PATH_ROOT:-}"
+DB_GOOSE=${GOOSE_ROOT:+$GOOSE_ROOT/data/sessions/sessions.db}; DB_GOOSE=${DB_GOOSE:-$XDG_DATA/goose/sessions/sessions.db}
 DB_MUSE="$XDG_DATA/muse/session-index.db"
-DB_OPENCLAW_GLOB="$HOME/.openclaw/agents/*/agent/openclaw-agent.sqlite"
+abs_dir OPENCLAW_STATE "${OPENCLAW_STATE_DIR:-}"
+if [ -z "$OPENCLAW_STATE" ]; then abs_dir OPENCLAW_STATE "${OPENCLAW_HOME:-}"; OPENCLAW_STATE="${OPENCLAW_STATE:-$HOME}/.openclaw"; fi
 
 color_of() { # agent -> sets COLOR
   case $1 in
@@ -164,7 +183,7 @@ db_rows() {
     sqlite3 -batch -readonly -separator '	' "$DB_MUSE" "select updated_at_us/1000000, 'muse', '$DB_MUSE', session_id, coalesce(workspace_root, ''), $q
       from sessions where status = 'valid'" 2>/dev/null
   fi
-  for db in $DB_OPENCLAW_GLOB; do
+  for db in "$OPENCLAW_STATE"/agents/*/agent/openclaw-agent.sqlite; do
     [ -f "$db" ] || continue
     q=$(san "coalesce((select coalesce(json_extract(e.event_json, '\$.message.content[0].text'), json_extract(e.event_json, '\$.message.content')) from transcript_events e where e.session_id = w.session_id and json_extract(e.event_json, '\$.type') = 'message' and json_extract(e.event_json, '\$.message.role') = 'user' order by e.seq limit 1), nullif(w.display_name, ''), '')")
     sqlite3 -batch -readonly -separator '	' "$db" "select w.updated_at/1000, 'openclaw', '$db', w.session_id, substr(w.session_key, 7), $q
@@ -193,12 +212,13 @@ join_cache() { # missfile
       if (agent == "") next
       base = f; sub(/.*\//, "", base)
       if (agent == "codex") { if (base !~ /^rollout-.*\.jsonl$/) next
-        sub(/^rollout-[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}-/, "", base) }
+        sub(/^rollout-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]-[0-9][0-9]-[0-9][0-9]-/, "", base) }
       else if (agent == "pi") sub(/^[^_]*_/, "", base)
       else if (agent == "gemini") { if (f !~ /\/chats\/session-.*\.jsonl$/) next
         sub(/\.jsonl$/, "", base); sub(/.*-/, "", base) }
       else if (agent == "cline") { dir = f; sub(/\/[^\/]*$/, "", dir); sub(/.*\//, "", dir)
         if (base != dir ".json") next }
+      else if (agent == "qwen") { if (f !~ /\/chats\/[0-9A-Fa-f-]+\.jsonl$/) next }   # not ledgers, archives or journals
       else if (base !~ /\.jsonl$/) next
       sub(/\.jsonl?$/, "", base)
       if (f in fullid) base = fullid[f]
@@ -309,7 +329,7 @@ since_ts() { # agent path id -> last prompt epoch seconds, if available
       yy = y - (m <= 2); a = int(yy / 400); mm = m + (m > 2 ? -3 : 9)
       days = int((153 * mm + 2) / 5) + d - 1 + 365 * (yy - 400 * a) + int((yy - 400 * a) / 4) - int((yy - 400 * a) / 100) + 146097 * a - 719468
       return days * 86400 + H * 3600 + M * 60 + S }
-    index($0, pat) && index($0, "\"text\"") && !index($0, "tool_result") && match($0, /"timestamp":"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z"/) {
+    index($0, pat) && index($0, "\"text\"") && !index($0, "tool_result") && match($0, /"timestamp":"[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9:.]+Z"/) {
       t = substr($0, RSTART + 13, RLENGTH - 14) }
     END { if (t != "") print epoch(t) }'
 }
@@ -601,15 +621,16 @@ native_claude() ( # work
 # shellcheck disable=SC2016
 native_pi() ( # work
   umask 077
-  local agent="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}" sid now dir file recent settings='{}'
-  recent=$(newest "$agent"/sessions/*/*.jsonl)
+  local agent="$PI_AGENT" sid now dir file recent settings='{}'
+  recent=$(newest "$PI_SESSIONS"/*.jsonl "$PI_SESSIONS"/*/*.jsonl)
   if [ -n "$recent" ]; then
     head -n 1 "$recent" | jq -e '.type == "session" and .version == 3' >/dev/null ||
       { echo "unrecognised Pi session format" >&2; return 1; }
   fi
   [ -f "$agent/settings.json" ] && settings=$(jq -c . "$agent/settings.json" 2>/dev/null || echo '{}')
   sid=$(new_uuid) now=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
-  dir="$agent/sessions/--$(pwd -P | sed 's|^/||; s|[/\\:]|-|g')--"
+  dir="$PI_SESSIONS"
+  [ "$PI_FLAT" = 1 ] || dir="$PI_SESSIONS/--$(pwd -P | sed 's|^/||; s|[/\\:]|-|g')--"
   file="$dir/$(printf '%s' "$now" | tr ':.' '--')_$sid.jsonl"
   mkdir -p "$dir" || return
   jq -c --arg cwd "$(pwd -P)" --arg sid "$sid" --arg now "$now" --argjson ms "$(date +%s)000" --argjson settings "$settings" '
@@ -707,7 +728,7 @@ openclaw_gateway() {
 # shellcheck disable=SC2016
 native_openclaw() ( # work
   umask 077
-  local db="$HOME/.openclaw/agents/main/agent/openclaw-agent.sqlite" sid key
+  local db="$OPENCLAW_STATE/agents/main/agent/openclaw-agent.sqlite" sid key
   [ -f "$db" ] || { echo "no OpenClaw agent database" >&2; return 1; }
   # a running gateway keeps its own copy of sessions and blocks local chat
   openclaw_gateway && { echo "an OpenClaw gateway is running" >&2; return 1; }
@@ -716,7 +737,7 @@ native_openclaw() ( # work
     { echo "unrecognised OpenClaw database version" >&2; return 1; }
   sid=$(new_uuid)
   key="agent:main:lsa-${sid:0:8}"
-  jq -r --arg sid "$sid" --arg key "$key" --arg cwd "$HOME/.openclaw/workspace" --arg now "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
+  jq -r --arg sid "$sid" --arg key "$key" --arg cwd "$OPENCLAW_STATE/workspace" --arg now "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
     --argjson ms "$(date +%s)000" --arg ids "$(new_uuid)" '
     def sq: "'"'"'" + gsub("'"'"'"; "'"'"''"'"'") + "'"'"'";
     def uid($n): $ids[0:24] + ("00000000000" + ($n | tostring))[-12:];
@@ -742,7 +763,7 @@ native_openclaw() ( # work
 # shellcheck disable=SC2016
 native_qwen() ( # work
   umask 077
-  local store="${QWEN_HOME:-$HOME/.qwen}/projects" sid dir recent
+  local store="$QWEN_BASE/projects" sid dir recent
   recent=$(newest "$store"/*/chats/*.jsonl)
   if [ -n "$recent" ]; then
     head -n 1 "$recent" | jq -e 'has("uuid") and has("parentUuid") and has("sessionId") and has("type")' >/dev/null ||
@@ -806,7 +827,7 @@ native_gemini() ( # work
 # shellcheck disable=SC2016
 native_cline() ( # work
   umask 077
-  local store="$HOME/.cline/data/sessions" providers="$HOME/.cline/data/settings/providers.json" recent sid dir ms pm
+  local store="$CLINE_SESSIONS" providers="${CLINE_PROVIDER_SETTINGS_PATH:-$CLINE_DATA/settings/providers.json}" recent sid dir ms pm
   # shellcheck disable=SC2010,SC2012  # cline ids have no newlines
   recent=$(ls -t "$store"/*/*.json 2>/dev/null | grep -v '\.messages\.json$' | head -n 1)
   if [ -n "$recent" ]; then
@@ -818,7 +839,7 @@ native_cline() ( # work
     | select(.provider and .model)' "$providers" 2>/dev/null)
   [ -n "$pm" ] || { echo "no Cline provider configured" >&2; return 1; }
   ms="$(date +%s)000"
-  sid="${ms}_$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom | head -c 5)"
+  sid="${ms}_$(new_uuid | tr -d - | cut -c1-5)"
   dir="$store/$sid"
   mkdir -p "$1/cline" || return
   jq -c --argjson ms "$ms" '{version: 1, updated_at: (($ms / 1000) | todate),
@@ -846,7 +867,7 @@ native_opencode() ( # work
   model=$(jq -r '.model // empty' "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json" 2>/dev/null)
   model=${model:-opencode/handoff}
   jq --arg cwd "$(pwd -P)" --arg version "$version" --arg model "$model" --argjson ms "$(date +%s)000" \
-    --arg rand "$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 14)" '
+    --arg rand "$(new_uuid | tr -d - | cut -c1-14)" '
     # opencode ids: prefix_ + 12 hex digits of ms*4096+counter + 14 random characters;
     # session ids are inverted so the newest sorts first
     def hex12: . as $n | [range(11; -1; -1) as $k | ($n / pow(16; $k) | floor) | . - 16 * (. / 16 | floor)]
