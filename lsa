@@ -11,7 +11,7 @@ lsa - ls for agent sessions
 
 usage: lsa [options] [dir]          list sessions started in dir (default: .)
        lsa show <id>                print a transcript as plain text
-       lsa handoff <id> <agent> [options...]  continue in claude, codex or pi
+       lsa handoff <id> <agent> [options...]  continue it in another agent
        lsa path <id>                print where the transcript lives
        lsa resume <id>              reopen the session in its own agent
 
@@ -67,7 +67,7 @@ resume_cmd() { # agent id file cwd -> sets RESUME ("" when the agent has no resu
     qwen)     RESUME="qwen --resume $2";;
     cline)    RESUME="cline -i --id $2";;
     opencode) RESUME="opencode --session $2";;
-    goose)    RESUME="goose session --resume --session-id $2";;
+    goose)    RESUME="goose session --resume --session-id $2 --history";;
     muse)     RESUME="muse resume $2";;
     openclaw) RESUME="openclaw tui --session agent:$4";;   # the "directory" column holds the session key
     *)        RESUME="";;
@@ -444,7 +444,8 @@ SHOW_JQ='
     elif has("content") then .content | text
     else safe | tojson end;
   def turn($role; $body):
-    ($body | text) as $t | select($t | length > 0) | "\n## " + $role + "\n" + $t;
+    ($body | text) as $t | select($t | length > 0)
+    | if $ENV.LSA_TURNS == "1" then {role: $role, text: $t} | tojson else "\n## " + $role + "\n" + $t end;
   def codex_item:
     if .type == "message" then turn(.role; .content)
     elif .type == "function_call" or .type == "custom_tool_call" then
@@ -537,44 +538,377 @@ cmd_show() {
   show_session "$agent" "$id" "$f" "$cwd"
 }
 
-handoff_codex() (
-  local directory=$1 snapshot=$2 server='' reply step id
-  umask 077
-  mkfifo "$directory/input" "$directory/output" || return
-  trap 'exec 3>&- 4<&-; if [ -n "$server" ]; then kill "$server" 2>/dev/null || :; wait "$server" 2>/dev/null || :; fi; rm -f "$directory/input" "$directory/output"' EXIT
-  exec 3<> "$directory/input" || return
-  codex app-server < "$directory/input" > "$directory/output" 3>&- 2> "$directory/codex.log" &
-  server=$!
-  exec 4< "$directory/output" || return
-  printf '{"id":1,"method":"initialize","params":{"clientInfo":{"name":"lsa","version":"%s"}}}\n' "$VERSION" >&3 || return
-  while IFS= read -r -t 30 reply <&4; do
-    step=$(jq -r 'if .error then "error: " + .error.message else (.id // "" | tostring) end' <<< "$reply") || return
-    case $step in
-      1)
-        printf '{"method":"initialized","params":{}}\n' >&3 || return
-        jq -cn --arg cwd "$PWD" '{id:2,method:"thread/start",params:{cwd:$cwd}}' >&3 || return;;
-      2)
-        id=$(jq -er '.result.thread.id' <<< "$reply") || return
-        jq -cn --arg id "$id" --rawfile text "$snapshot" \
-          '{id:3,method:"thread/inject_items",params:{threadId:$id,items:[{type:"message",role:"user",content:[{type:"input_text",text:$text}]}]}}' >&3 || return;;
-      3)
-        exec 3>&-
-        wait "$server" || return
-        server=''
-        printf '%s\n' "$id"
-        return;;
-      error:*) echo "lsa: Codex could not load the transcript ($step)" >&2; return 1;;
-    esac
-  done
-  echo "lsa: Codex did not finish loading the transcript; see $directory/codex.log" >&2
-  return 1
+
+# ---------- handoff: continue a session in another agent ----------
+HANDOFF_AGENTS='claude codex pi gemini qwen cline opencode goose muse openclaw'
+
+# a session as alternating user and assistant messages, the shape every agent resumes
+handoff_turns() ( # agent id index-path cwd
+  set -o pipefail
+  export LSA_TURNS=1
+  show_session "$@" | jq -s --arg agent "$1" --arg id "$2" '
+    [{role: "user", text: "[continued from \($agent) session \($id) with lsa handoff; its tool calls and results are shown as text]"}]
+    + map(if .role == "user" or .role == "assistant" then .
+          elif .role == "gemini" or .role == "model" or (.role | startswith("reasoning")) then {role: "assistant", text}
+          else {role: "user", text: ("[" + .role + "]\n" + .text)} end)
+    | reduce .[] as $m ([]; if length > 0 and .[-1].role == $m.role then .[-1].text += "\n\n" + $m.text else . + [$m] end)'
 )
 
-cmd_handoff() {
-  local source=$1 hit agent id f cwd target=$2 directory snapshot prompt thread
+new_uuid() {
+  if command -v uuidgen >/dev/null; then uuidgen | tr 'A-F' 'a-f'; else cat /proc/sys/kernel/random/uuid; fi
+}
+
+# each native_<agent> writes turns.json as that agent's own session and prints
+# what its resume command needs. It fails, so handoff falls back, when the
+# agent's recent sessions no longer look like what it writes.
+# shellcheck disable=SC2012  # session file names have no newlines
+newest() { ls -t "$@" 2>/dev/null | head -n 1; }
+
+# shellcheck disable=SC2016
+claude_jsonl() { # turns sid -> Claude Code's session lines, written in the current directory
+  jq -c --arg cwd "$(pwd -P)" --arg sid "$2" --arg now "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" '
+    def uuid($i): $sid[0:24] + ("00000000000" + ($i | tostring))[-12:];
+    to_entries[] | .key as $i | .value as $m
+    | {parentUuid: (if $i == 0 then null else uuid($i - 1) end), isSidechain: false, userType: "external",
+       cwd: $cwd, sessionId: $sid, type: $m.role, uuid: uuid($i), timestamp: $now,
+       message: (if $m.role == "user" then {role: "user", content: $m.text}
+         else {role: "assistant", model: "<synthetic>", content: [{type: "text", text: $m.text}]} end)}' "$1"
+}
+
+native_claude() ( # work
+  umask 077
+  local store="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects" sid dir recent
+  # shellcheck disable=SC2010,SC2012  # subagent transcripts are listed separately
+  recent=$(ls -t "$store"/*/*.jsonl 2>/dev/null | grep -v '/agent-[^/]*$' | head -n 1)
+  if [ -n "$recent" ]; then
+    grep -m 1 '"type":"user"' "$recent" | jq -e 'has("uuid") and has("parentUuid") and has("timestamp") and has("message")' >/dev/null ||
+      { echo "unrecognised Claude session format" >&2; return 1; }
+  fi
+  sid=$(new_uuid)
+  dir="$store/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')"
+  mkdir -p "$dir" || return
+  claude_jsonl "$1/turns.json" "$sid" > "$1/native.jsonl" && mv "$1/native.jsonl" "$dir/$sid.jsonl" || return
+  printf '%s\n' "$sid"
+)
+
+# shellcheck disable=SC2016
+native_pi() ( # work
+  umask 077
+  local agent="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}" sid now dir file recent settings='{}'
+  recent=$(newest "$agent"/sessions/*/*.jsonl)
+  if [ -n "$recent" ]; then
+    head -n 1 "$recent" | jq -e '.type == "session" and .version == 3' >/dev/null ||
+      { echo "unrecognised Pi session format" >&2; return 1; }
+  fi
+  [ -f "$agent/settings.json" ] && settings=$(jq -c . "$agent/settings.json" 2>/dev/null || echo '{}')
+  sid=$(new_uuid) now=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+  dir="$agent/sessions/--$(pwd -P | sed 's|^/||; s|[/\\:]|-|g')--"
+  file="$dir/$(printf '%s' "$now" | tr ':.' '--')_$sid.jsonl"
+  mkdir -p "$dir" || return
+  jq -c --arg cwd "$(pwd -P)" --arg sid "$sid" --arg now "$now" --argjson ms "$(date +%s)000" --argjson settings "$settings" '
+    def id($i): "lsa" + ("0000" + ($i | tostring))[-5:];
+    {type: "session", version: 3, id: $sid, timestamp: $now, cwd: $cwd},
+    (to_entries[] | .key as $i | .value as $m
+     | {type: "message", id: id($i), parentId: (if $i == 0 then null else id($i - 1) end), timestamp: $now,
+        message: ({role: $m.role, content: [{type: "text", text: $m.text}], timestamp: $ms}
+          + if $m.role == "assistant" then {api: "lsa", provider: "lsa", model: "handoff", stopReason: "stop",
+              usage: {input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+                cost: {input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0}}} else {} end)}),
+    # hand the next turn to the configured model rather than the placeholder one
+    (if $settings.defaultProvider and $settings.defaultModel then
+      {type: "model_change", id: id(length), parentId: id(length - 1), timestamp: $now,
+       provider: $settings.defaultProvider, modelId: $settings.defaultModel} else empty end)' \
+    "$1/turns.json" > "$1/native.jsonl" && mv "$1/native.jsonl" "$file" || return
+  printf '%s\n' "$file"
+)
+
+# shellcheck disable=SC2016
+native_codex() ( # work
+  umask 077
+  local home="${CODEX_HOME:-$HOME/.codex}" sid dir recent version provider
+  recent=$(newest "$home"/sessions/*/*/*/rollout-*.jsonl)
+  if [ -n "$recent" ]; then
+    head -n 1 "$recent" | jq -e '.type == "session_meta" and (.payload | has("id") and has("cwd") and has("cli_version"))' >/dev/null ||
+      { echo "unrecognised Codex session format" >&2; return 1; }
+  fi
+  version=$(codex --version 2>/dev/null | awk '{ print $NF }')
+  [ -n "$version" ] || { echo "could not read the Codex version" >&2; return 1; }
+  # resume needs a provider; use the configured one, as a new Codex session would
+  provider=$(awk -F'"' '/^\[/ { exit } /^[ \t]*model_provider[ \t]*=/ { print $2; exit }' "$home/config.toml" 2>/dev/null)
+  sid=$(new_uuid)
+  dir="$home/sessions/$(date +%Y/%m/%d)"
+  mkdir -p "$dir" || return
+  # response_item is what the model is sent; event_msg is what the TUI draws
+  jq -c --arg cwd "$(pwd -P)" --arg sid "$sid" --arg version "$version" --arg provider "${provider:-openai}" --arg now "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" '
+    {timestamp: $now, type: "session_meta", payload: {id: $sid, timestamp: $now, cwd: $cwd,
+      originator: "lsa", cli_version: $version, source: "cli", model_provider: $provider}},
+    (.[] | {timestamp: $now, type: "response_item", payload: {type: "message", role,
+             content: [{type: (if .role == "user" then "input_text" else "output_text" end), text}]}},
+           {timestamp: $now, type: "event_msg", payload: {type: (if .role == "user" then "user_message" else "agent_message" end),
+             message: .text}})' \
+    "$1/turns.json" > "$1/native.jsonl" && mv "$1/native.jsonl" "$dir/rollout-$(date +%Y-%m-%dT%H-%M-%S)-$sid.jsonl" || return
+  printf '%s\n' "$sid"
+)
+
+# goose imports Claude Code sessions itself
+native_goose() ( # work
+  umask 077
+  local id
+  claude_jsonl "$1/turns.json" "$(new_uuid)" > "$1/goose.jsonl" || return
+  id=$(goose session import "$1/goose.jsonl" 2>"$1/goose.err" | awk '/Session imported/ { getline; print $1; exit }')
+  [ -n "$id" ] || { echo "goose could not import the session: $(head -n 1 "$1/goose.err")" >&2; return 1; }
+  printf '%s\n' "$id"
+)
+
+# shellcheck disable=SC2016
+native_muse() ( # work
+  umask 077
+  local root="${XDG_DATA_HOME:-$HOME/.local/share}/muse/sessions" sid dir recent line
+  recent=$(newest "$root"/*/*/*/*/session.jsonl)
+  if [ -n "$recent" ]; then
+    for line in '"kind":"started"|prompt' '"kind":"assistant_message_committed"|text'; do
+      grep -m 1 "${line%|*}" "$recent" | jq -e --arg key "${line#*|}" '.schema_version == 1 and (.payload.event | has($key))' >/dev/null ||
+        { grep -q "${line%|*}" "$recent" && { echo "unrecognised Muse session format" >&2; return 1; }; }
+    done
+  fi
+  sid=$(new_uuid)
+  dir="$root/$(date +%Y/%m/%d)/$sid"
+  mkdir -p "$dir" || return
+  # one run per user message: started, the assistant reply, then terminal.
+  # No session.end: muse refuses to resume one without its permission record.
+  jq -c --arg cwd "$(pwd -P)" --arg sid "$sid" --arg ids "$(new_uuid)" --arg runs "$(new_uuid)" --argjson us "$(date +%s)000000" '
+    def uid($base; $n): $base[0:24] + ("00000000000" + ($n | tostring))[-12:];
+    def run($r; $event): {type: "runtime.session", payload: {kind: "run", run_id: $r, event: $event}};
+    [{type: "runtime.session.metadata", payload: {kind: "metadata", record: {workspace_root: $cwd}}}]
+    + [range(0; length; 2) as $i | .[$i] as $u | .[$i + 1] as $a | uid($runs; $i) as $r
+       | run($r; {kind: "started", prompt: $u.text}),
+         (if $a then run($r; {kind: "assistant_message_committed", message_id: uid($runs; $i + 1),
+           response_id: "lsa-handoff", text: $a.text}) else empty end),
+         run($r; {kind: "terminal", terminal: "completed", reason: null})]
+    | to_entries[] | (.key + 1) as $n
+    | {schema_version: 1, id: uid($ids; $n), stream: {kind: "session", id: $sid}, sequence: $n,
+       recorded_at: ($us + $n), record_type: "event", durability: "durable", causation_id: null,
+       payload_type: .value.type, payload_schema_version: 1, payload: .value.payload}' \
+    "$1/turns.json" > "$1/native.jsonl" && mv "$1/native.jsonl" "$dir/session.jsonl" || return
+  printf '%s\n' "$sid"
+)
+
+openclaw_gateway() {
+  openclaw gateway status --json 2>/dev/null | jq -e '.rpc.gatewayReached == true' >/dev/null
+}
+
+# shellcheck disable=SC2016
+native_openclaw() ( # work
+  umask 077
+  local db="$HOME/.openclaw/agents/main/agent/openclaw-agent.sqlite" sid key
+  [ -f "$db" ] || { echo "no OpenClaw agent database" >&2; return 1; }
+  # a running gateway keeps its own copy of sessions and blocks local chat
+  openclaw_gateway && { echo "an OpenClaw gateway is running" >&2; return 1; }
+  # openclaw migrates older databases and refuses newer ones, so only write the version this matches
+  [ "$(sqlite3 -readonly "$db" 'pragma user_version' 2>/dev/null)" = 21 ] ||
+    { echo "unrecognised OpenClaw database version" >&2; return 1; }
+  sid=$(new_uuid)
+  key="agent:main:lsa-${sid:0:8}"
+  jq -r --arg sid "$sid" --arg key "$key" --arg cwd "$HOME/.openclaw/workspace" --arg now "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
+    --argjson ms "$(date +%s)000" --arg ids "$(new_uuid)" '
+    def sq: "'"'"'" + gsub("'"'"'"; "'"'"''"'"'") + "'"'"'";
+    def uid($n): $ids[0:24] + ("00000000000" + ($n | tostring))[-12:];
+    def event($seq; $e): "insert into transcript_events (session_id, seq, event_json, created_at) values (\($sid | sq), \($seq), \($e | tojson | sq), \($ms));";
+    "begin immediate;",
+    "insert into session_nodes (session_key, current_session_id, entry_json, updated_at) values (\($key | sq), \($sid | sq), \({sessionId: $sid, updatedAt: $ms, chatType: "direct"} | tojson | sq), \($ms));",
+    # an insert trigger marks new rows for repair; this is the row openclaw would write
+    "update session_nodes set entry_valid = 1 where session_key = \($key | sq);",
+    "insert into session_windows (session_id, session_key, created_at, updated_at, reason, chat_type) values (\($sid | sq), \($key | sq), \($ms), \($ms), '"'"'initial'"'"', '"'"'direct'"'"');",
+    event(0; {type: "session", version: 4, id: $sid, timestamp: $now, cwd: $cwd}),
+    (to_entries[] | .key as $i | .value as $m
+     | event($i + 1; {type: "message", id: uid($i), parentId: (if $i == 0 then null else uid($i - 1) end), timestamp: $now,
+         message: ({role: $m.role, timestamp: $ms}
+           + if $m.role == "user" then {content: $m.text}
+             else {content: [{type: "text", text: $m.text}], stopReason: "stop", api: "lsa", provider: "lsa", model: "handoff",
+               usage: {input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+                 cost: {input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0}}} end)})),
+    "commit;"' "$1/turns.json" > "$1/openclaw.sql" || return
+  sqlite3 -bail -cmd '.timeout 5000' "$db" < "$1/openclaw.sql" >/dev/null || return
+  printf '%s\n' "$key"
+)
+
+# shellcheck disable=SC2016
+native_qwen() ( # work
+  umask 077
+  local store="${QWEN_HOME:-$HOME/.qwen}/projects" sid dir recent
+  recent=$(newest "$store"/*/chats/*.jsonl)
+  if [ -n "$recent" ]; then
+    head -n 1 "$recent" | jq -e 'has("uuid") and has("parentUuid") and has("sessionId") and has("type")' >/dev/null ||
+      { echo "unrecognised Qwen session format" >&2; return 1; }
+  fi
+  sid=$(new_uuid)
+  dir="$store/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')/chats"
+  mkdir -p "$dir" || return
+  jq -c --arg cwd "$(pwd -P)" --arg sid "$sid" --arg now "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" '
+    def uuid($i): $sid[0:24] + ("00000000000" + ($i | tostring))[-12:];
+    to_entries[] | .key as $i | .value as $m
+    | {uuid: uuid($i), parentUuid: (if $i == 0 then null else uuid($i - 1) end), sessionId: $sid, timestamp: $now,
+       type: $m.role, cwd: $cwd, message: {role: (if $m.role == "user" then "user" else "model" end), parts: [{text: $m.text}]}}' \
+    "$1/turns.json" > "$1/native.jsonl" && mv "$1/native.jsonl" "$dir/$sid.jsonl" || return
+  printf '%s\n' "$sid"
+)
+
+# shellcheck disable=SC2016
+native_gemini() ( # work
+  umask 077
+  local tmp="$GEMINI_HOME/tmp" path slug base n marker recent sid hash
+  path=$(pwd -P)
+  recent=$(newest "$tmp"/*/chats/session-*.jsonl)
+  if [ -n "$recent" ]; then
+    head -n 1 "$recent" | jq -e 'has("sessionId") and has("projectHash")' >/dev/null ||
+      { echo "unrecognised Gemini session format" >&2; return 1; }
+  fi
+  # the project's short id: registered, marked by a .project_root, or claimed like gemini does
+  slug=$(jq -r --arg p "$path" '.projects[$p] // empty' "$GEMINI_HOME/projects.json" 2>/dev/null)
+  if [ -z "$slug" ]; then
+    for marker in "$tmp"/*/.project_root; do
+      [ "$(cat "$marker" 2>/dev/null)" = "$path" ] && { slug=$(basename "$(dirname "$marker")"); break; }
+    done
+  fi
+  if [ -z "$slug" ]; then
+    base=$(basename "$path" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g; s/--*/-/g; s/^-//; s/-$//')
+    base=${base:-project} slug=$base n=0
+    while [ -e "$tmp/$slug" ] || jq -e --arg s "$slug" '.projects | any(. == $s)' "$GEMINI_HOME/projects.json" >/dev/null 2>&1; do
+      n=$((n+1)) slug="$base-$n"
+    done
+    mkdir -p "$tmp/$slug" && printf '%s' "$path" > "$tmp/$slug/.project_root" || return
+  fi
+  mkdir -p "$tmp/$slug/chats" || return
+  sid=$(new_uuid)
+  hash=$(printf '%s' "$path" | { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-64)
+  # the name must not end in the session id's first 8 characters: gemini's
+  # cleanup deletes every file with that suffix once a resume leaves a stub behind
+  jq -c --arg sid "$sid" --arg hash "$hash" --arg now "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" '
+    def uid($i): $sid[0:24] + ("00000000000" + ($i | tostring))[-12:];
+    {sessionId: $sid, projectHash: $hash, startTime: $now, lastUpdated: $now, kind: "main"},
+    (to_entries[] | .key as $i | .value as $m
+     # gemini drops user text that starts like a command or its own injected context
+     | {id: uid($i), timestamp: $now, type: (if $m.role == "user" then "user" else "gemini" end),
+        content: [{text: (if $m.role == "user" and ($m.text | test("^\\s*([/?]|<session_context>|<hook_context>)"))
+          then "[message]\n" + $m.text else $m.text end)}]})' \
+    "$1/turns.json" > "$1/native.jsonl" &&
+    mv "$1/native.jsonl" "$tmp/$slug/chats/session-$(date -u +%Y-%m-%dT%H-%M)-$(new_uuid | cut -c1-8).jsonl" || return
+  printf '%s\n' "$sid"
+)
+
+# shellcheck disable=SC2016
+native_cline() ( # work
+  umask 077
+  local store="$HOME/.cline/data/sessions" providers="$HOME/.cline/data/settings/providers.json" recent sid dir ms pm
+  # shellcheck disable=SC2010,SC2012  # cline ids have no newlines
+  recent=$(ls -t "$store"/*/*.json 2>/dev/null | grep -v '\.messages\.json$' | head -n 1)
+  if [ -n "$recent" ]; then
+    jq -e '.version == 1 and has("session_id") and has("messages_path")' "$recent" >/dev/null ||
+      { echo "unrecognised Cline session format" >&2; return 1; }
+  fi
+  # resume adopts the session's provider and model, so use the ones cline last used
+  pm=$(jq -c '.lastUsedProvider as $p | {provider: $p, model: .providers[$p].settings.model}
+    | select(.provider and .model)' "$providers" 2>/dev/null)
+  [ -n "$pm" ] || { echo "no Cline provider configured" >&2; return 1; }
+  ms="$(date +%s)000"
+  sid="${ms}_$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom | head -c 5)"
+  dir="$store/$sid"
+  mkdir -p "$1/cline" || return
+  jq -c --argjson ms "$ms" '{version: 1, updated_at: (($ms / 1000) | todate),
+    messages: to_entries | map({id: "msg_lsa_\(.key)", role: .value.role,
+      content: [{type: "text", text: .value.text}], ts: ($ms + .key)})}' "$1/turns.json" > "$1/cline/$sid.messages.json" || return
+  jq -n --arg sid "$sid" --arg cwd "$(pwd -P)" --argjson pm "$pm" --argjson ms "$ms" \
+    --arg messages "$dir/$sid.messages.json" --slurpfile turns "$1/turns.json" '
+    ($ms / 1000 | strftime("%Y-%m-%dT%H:%M:%S.000Z")) as $now
+    | {version: 1, session_id: $sid, source: "cli", pid: 0, started_at: $now, ended_at: $now, exit_code: 0,
+       status: "completed", interactive: true, provider: $pm.provider, model: $pm.model, cwd: $cwd, workspace_root: $cwd,
+       enable_tools: true, enable_spawn: false, enable_teams: false, prompt: ($turns[0][0].text | split("\n")[0]),
+       metadata: {title: ($turns[0][0].text | split("\n")[0])}, messages_path: $messages}' > "$1/cline/$sid.json" || return
+  mkdir -p "$store" && mv "$1/cline" "$dir" || return
+  printf '%s\n' "$sid"
+)
+
+# opencode imports its own export format
+# shellcheck disable=SC2016
+native_opencode() ( # work
+  umask 077
+  local version id model
+  version=$(opencode --version 2>/dev/null | awk '{ print $NF }')
+  [ -n "$version" ] || { echo "could not read the OpenCode version" >&2; return 1; }
+  # new sessions and resumes use the configured model; imported messages only need one to name
+  model=$(jq -r '.model // empty' "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json" 2>/dev/null)
+  model=${model:-opencode/handoff}
+  jq --arg cwd "$(pwd -P)" --arg version "$version" --arg model "$model" --argjson ms "$(date +%s)000" \
+    --arg rand "$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 14)" '
+    # opencode ids: prefix_ + 12 hex digits of ms*4096+counter + 14 random characters;
+    # session ids are inverted so the newest sorts first
+    def hex12: . as $n | [range(11; -1; -1) as $k | ($n / pow(16; $k) | floor) | . - 16 * (. / 16 | floor)]
+      | map("0123456789abcdef"[.:. + 1]) | join("");
+    def oid($prefix; $n): $prefix + "_" + ($n | hex12) + $rand;
+    ($ms * 4096) as $base | oid("ses"; 281474976710655 - $base) as $ses
+    | ($model | split("/")) as $pm | {providerID: $pm[0], modelID: ($pm[1:] | join("/"))} as $m
+    | {info: {id: $ses, slug: "lsa-handoff", projectID: "global", directory: $cwd, version: $version,
+        title: (.[0].text | split("\n")[0]), time: {created: $ms, updated: $ms}},
+       messages: [to_entries[] | .key as $i | .value as $t | oid("msg"; $base + 2 * $i + 1) as $msg
+         | {info: ({id: $msg, sessionID: $ses, role: $t.role, time: {created: ($ms + $i)}, agent: "build"}
+             + if $t.role == "user" then {model: $m}
+               else {time: {created: ($ms + $i), completed: ($ms + $i)}, parentID: oid("msg"; $base + 2 * $i - 1),
+                 modelID: $m.modelID, providerID: $m.providerID, mode: "build", path: {cwd: $cwd, root: $cwd},
+                 cost: 0, tokens: {input: 0, output: 0, reasoning: 0, cache: {read: 0, write: 0}}, finish: "stop"} end),
+            parts: [{id: oid("prt"; $base + 2 * $i + 2), sessionID: $ses, messageID: $msg, type: "text", text: $t.text}]}]}' \
+    "$1/turns.json" > "$1/opencode.json" || return
+  id=$(jq -r .info.id "$1/opencode.json")
+  opencode import "$1/opencode.json" >"$1/opencode.log" 2>&1 ||
+    { echo "opencode could not import the session: $(tail -n 1 "$1/opencode.log")" >&2; return 1; }
+  printf '%s\n' "$id"
+)
+
+handoff_resume() { # target session [options...]
+  local target=$1 session=$2
+  shift 2
   case $target in
-    claude|codex|pi) ;;
-    *) echo "lsa: handoff supports claude, codex or pi (got '$target')" >&2; return 2;;
+    claude) exec claude --resume "$session" "$@";;
+    codex) exec codex resume "$session" "$@";;
+    pi) exec pi --session "$session" "$@";;
+    gemini) exec gemini --resume "$session" "$@";;
+    qwen) exec qwen --resume "$session" "$@";;
+    cline) exec cline -i --id "$session" "$@";;
+    opencode) exec opencode --session "$session" "$@";;
+    goose) exec goose session --resume --session-id "$session" --history "$@";;
+    muse) exec muse resume "$session" "$@";;
+    openclaw) exec openclaw chat --session "$session" "$@";;
+  esac
+}
+
+# the fallback: an interactive session that opens with the whole transcript
+# as its first message. Agents that only take it as an argument get the most
+# recent part when it is too long for one.
+handoff_first() { # target work [options...]
+  local target=$1 file="$2/transcript.md" prompt text
+  shift 2
+  prompt="That is our conversation so far, from another agent. Pick up where it left off: say where things stand, then wait for my next message."
+  text=$(tail -c 100000 "$file"; printf '\n\n%s' "$prompt")
+  case $target in
+    claude) exec claude "$@" "$prompt" < "$file";;
+    pi) exec pi "$@" "@$file" "$prompt";;
+    codex) exec codex "$@" "$text";;
+    gemini) exec gemini "$@" -i "$text";;
+    qwen) exec qwen "$@" -i "$text";;
+    cline) exec cline "$@" -i "$text";;
+    opencode) exec opencode "$@" --prompt "$prompt" < "$file";;
+    goose) printf '%s\n\n%s\n' "$(cat "$file")" "$prompt" > "$file.goose" && exec goose run "$@" -s -i "$file.goose";;
+    muse) exec muse "$@" "$text";;
+    openclaw)
+      set -- --session "agent:main:lsa-$(new_uuid | cut -c1-8)" --message "$text" "$@"
+      if openclaw_gateway; then exec openclaw tui "$@"; else exec openclaw chat "$@"; fi;;
+  esac
+}
+
+cmd_handoff() {
+  local source=$1 hit agent id f cwd target=$2 work session
+  case " $HANDOFF_AGENTS " in
+    *" $target "*) ;;
+    *) echo "lsa: handoff supports $HANDOFF_AGENTS (got '$target')" >&2; return 2;;
   esac
   shift 2
   command -v "$target" >/dev/null || { echo "lsa: '$target' is not installed or not on PATH" >&2; return 1; }
@@ -583,26 +917,23 @@ cmd_handoff() {
   if [ "$agent" != openclaw ] && [ -n "$cwd" ] && [ "$cwd" != - ]; then
     [ -d "$cwd" ] || { echo "lsa: session directory no longer exists: $cwd" >&2; return 1; }
   else cwd=$PWD; fi
-  directory=$(umask 077; mkdir -p "$CACHE_DIR/handoffs" && mktemp -d "$CACHE_DIR/handoffs/handoff.XXXXXX") || return
-  directory=$(cd "$directory" && pwd -P) || return
-  snapshot="$directory/transcript.md"
-  (
-    umask 077
-    printf '# Agent handoff\n\nSource agent: %s\nSession: %s\nProject: %s\nSource store: %s\n\n' "$agent" "$id" "$cwd" "$f" > "$snapshot"
-    show_session "$agent" "$id" "$f" "$cwd" >> "$snapshot"
-  ) || { rm -rf "$directory"; echo "lsa: could not export the session; handoff cancelled" >&2; return 1; }
-  prompt='Continue this conversation from where it left off.'
+  work=$(mktemp -d "${TMPDIR:-/tmp}/lsa-handoff.XXXXXX") || return
+  { handoff_turns "$agent" "$id" "$f" "$cwd" > "$work/turns.json" &&
+    printf '# Conversation continued from %s session %s\n' "$agent" "$id" > "$work/transcript.md" &&
+    show_session "$agent" "$id" "$f" "$cwd" >> "$work/transcript.md"; } ||
+    { rm -rf "$work"; echo "lsa: could not export the session; handoff cancelled" >&2; return 1; }
   cd "$cwd" || return
-  printf 'lsa: handing %s session %s to %s\nlsa: saved context: %s\n' "$agent" "$id" "$target" "$snapshot" >&2
-  case $target in
-    claude) exec claude "$@" "$prompt" < "$snapshot";;
-    pi) exec pi "$@" "@$snapshot" "$prompt";;
-    codex)
-      thread=$(handoff_codex "$directory" "$snapshot") || return
-      exec codex resume "$thread" "$@" "$prompt";;
-  esac
+  # best: write the conversation as the agent's own session and resume it, like lsa resume
+  if session=$("native_$target" "$work" 2>"$work/error"); then
+    rm -rf "$work"
+    printf 'lsa: copied %s session %s into a new %s session\n' "$agent" "$id" "$target" >&2
+    handoff_resume "$target" "$session" "$@"
+  fi
+  # otherwise: open the agent with the conversation as its first message
+  printf 'lsa: could not write a native %s session (%s); sending the conversation as the first message\n' \
+    "$target" "$(head -n 1 "$work/error")" >&2
+  handoff_first "$target" "$work" "$@"
 }
-
 cmd_path() {
   local hit agent id f cwd
   hit=$(find_one "$1") || exit 1

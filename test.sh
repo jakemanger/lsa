@@ -13,7 +13,7 @@ mkdir -p "$tmp/.claude/projects/x" "$tmp/.codex/sessions/2026/09/22" "$tmp/.pi/a
   "$tmp/.qwen/projects/x/chats" "$tmp/.gemini/tmp/quiet-otter/chats" "$tmp/.cline/data/sessions/1758500000000_ab1cd"
 cat > "$tmp/.claude/projects/x/aaaa1111-0000-0000-0000-000000000000.jsonl" <<EOF
 {"type":"queue-operation","sessionId":"aaaa1111-0000-0000-0000-000000000000"}
-{"type":"user","message":{"role":"user","content":[{"type":"text","text":"fix the \"login\" bug\nplease"}]},"cwd":"$proj","sessionId":"aaaa1111-0000-0000-0000-000000000000"}
+{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-09-22T10:00:00.000Z","message":{"role":"user","content":[{"type":"text","text":"fix the \"login\" bug\nplease"}]},"cwd":"$proj","sessionId":"aaaa1111-0000-0000-0000-000000000000"}
 {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"On it."},{"type":"tool_use","name":"bash","input":{"command":"ls"}}]},"cwd":"$proj"}
 EOF
 cat > "$tmp/.claude/projects/x/agent-sidechain.jsonl" <<EOF
@@ -322,7 +322,7 @@ check "resume qwen" "$proj"$'\nqwen\n--resume\neeee5555-0000-0000-0000-000000000
 check "resume cline" "$proj"$'\ncline\n-i\n--id\n1758500000000_ab1cd' "$(resume_output 1758)"
 if [ $have_sqlite = 1 ]; then
   check "resume opencode" "$proj"$'\nopencode\n--session\nses_gggg7777aaaa' "$(resume_output ses_g)"
-  check "resume goose" "$proj"$'\ngoose\nsession\n--resume\n--session-id\n20260922_7' "$(resume_output 2026)"
+  check "resume goose" "$proj"$'\ngoose\nsession\n--resume\n--session-id\n20260922_7\n--history' "$(resume_output 2026)"
   check "resume muse" "$proj"$'\nmuse\nresume\nhhhh8888-0000-0000-0000-000000000000' "$(resume_output hhhh)"
   check "resume openclaw keeps current directory" "$PWD"$'\nopenclaw\ntui\n--session\nagent:main:main' "$(resume_output iiii)"
 fi
@@ -382,83 +382,121 @@ long=$(CLAUDE_CONFIG_DIR="$spaced" COLUMNS=40 bash "$LSA" -a -t claude -l)
 check "-l preserves directory with spaces and quotes" "1" "$(printf '%s\n' "$long" | grep -Fc "$tmp/project with 'quotes'")"
 check "-l preserves transcript path with spaces" "1" "$(printf '%s\n' "$long" | grep -Fc "$spaced/projects/x/abcd0000-0000-0000-0000-000000000000.jsonl")"
 
-# check the native input each agent receives, without making model requests
+# Handoff writes each agent's own session format, then runs its resume command.
+# Stubs stand in for the agents; each destination gets a fresh home.
 if command -v jq >/dev/null; then
   mkdir -p "$tmp/handoff-bin"
-  export LSA_TEST_CODEX_CONTEXT="$tmp/codex-context"
   cat > "$tmp/handoff-bin/agent" <<'SH'
 #!/usr/bin/env bash
 set -eu
-if [ "${0##*/}" = codex ] && [ "${1:-}" = app-server ]; then
-  while IFS= read -r request; do
-    case $(jq -r '.method' <<< "$request") in
-      initialize) printf '{"id":1,"result":{}}\n';;
-      initialized) ;;
-      thread/start)
-        printf '{"method":"thread/started","params":{}}\n'
-        printf '{"id":2,"result":{"thread":{"id":"preloaded-session"}}}\n';;
-      thread/inject_items)
-        if [ "${LSA_TEST_CODEX_ERROR:-}" = 1 ]; then
-          printf '{"id":3,"error":{"message":"method not found"}}\n'
-        else
-          jq -er '.params.items[0] | select(.role == "user") | .content[0].text' <<< "$request" > "$LSA_TEST_CODEX_CONTEXT"
-          printf '{"id":3,"result":{}}\n'
-        fi;;
-      *) exit 1;;
-    esac
-  done
-  exit 0
-fi
-printf '%s\n' "$PWD" "${0##*/}" "argc=$#"
-printf 'arg=%s\n' "$@"
-case ${0##*/} in
-  claude) cat;;
-  pi) for arg in "$@"; do case $arg in @*) cat "${arg#@}";; esac; done;;
-  codex)
-    [ "$1" = resume ] && [ "$2" = preloaded-session ]
-    cat "$LSA_TEST_CODEX_CONTEXT";;
+name=${0##*/}
+case "$name ${1:-} ${2:-}" in
+  "codex --version"*) echo "codex-cli 0.156.1"; exit;;
+  "opencode --version"*) echo "1.18.30"; exit;;
+  "opencode import"*) cp "$2" "$HOME/opencode-import.json"; exit;;
+  "goose session import"*) cp "$3" "$HOME/goose-import.jsonl"; printf 'Session imported:\n20260924_1 - handoff\n'; exit;;
 esac
+printf '%s\n' "$PWD" "$name" "argc=$#"
+printf 'arg=%s\n' "$@"
 if [ "${LSA_TEST_READ_STDIN:-}" = 1 ]; then
   IFS= read -r followup
-  printf '\nstdin=%s\n' "$followup"
+  printf 'stdin=%s\n' "$followup"
 fi
 SH
   chmod +x "$tmp/handoff-bin/agent"
-  for agent in claude codex pi; do cp "$tmp/handoff-bin/agent" "$tmp/handoff-bin/$agent"; done
-  handoff_output() { PATH="$tmp/handoff-bin:$PATH" XDG_CACHE_HOME="$tmp/cache with spaces" bash "$LSA" handoff "$@" 2>"$tmp/handoff-error"; }
-  for target in claude codex pi; do
-    handed=$(handoff_output aaaa "$target")
+  targets='claude codex pi gemini qwen cline opencode goose muse openclaw'
+  for agent in $targets; do cp "$tmp/handoff-bin/agent" "$tmp/handoff-bin/$agent"; done
+  handoff_home() { # target -> a fresh home, with the settings its writer reads
+    local h="$tmp/handoff-$1"
+    rm -rf "$h"; mkdir -p "$h/.cline/data/settings"
+    printf '{"lastUsedProvider":"anthropic","providers":{"anthropic":{"settings":{"model":"claude-sonnet-5"}}}}\n' > "$h/.cline/data/settings/providers.json"
+    printf '%s' "$h"
+  }
+  handoff_output() { # target [lsa args...]
+    local target=$1; shift
+    HOME=$HANDOFF_HOME CLAUDE_CONFIG_DIR="$tmp/.claude" XDG_CACHE_HOME="$tmp/cache with spaces" PATH="$tmp/handoff-bin:$PATH" \
+      bash "$LSA" handoff "$@" 2>"$tmp/handoff-error"
+  }
+  arg() { sed -n "s/^arg=//p" | sed -n "${1}p"; }
+  native_text() { # target handed -> the message texts in the session it wrote
+    local h=$HANDOFF_HOME
+    case $1 in
+      claude) jq -r '.message.content | if type == "string" then . else .[].text end' "$tmp"/.claude/projects/*/"$(arg 2 <<< "$2")".jsonl;;
+      codex) jq -r 'select(.type == "response_item") | .payload.content[].text' "$h"/.codex/sessions/*/*/*/rollout-*-"$(arg 2 <<< "$2")".jsonl;;
+      pi) jq -r 'select(.type == "message") | .message.content[].text' "$(arg 2 <<< "$2")";;
+      qwen) jq -r '.message.parts[].text' "$h"/.qwen/projects/*/chats/"$(arg 2 <<< "$2")".jsonl;;
+      gemini) jq -r 'select(.type) | .content[].text' "$h"/.gemini/tmp/*/chats/session-*.jsonl;;
+      cline) jq -r '.messages[].content[].text' "$h"/.cline/data/sessions/"$(arg 3 <<< "$2")"/*.messages.json;;
+      opencode) jq -r '.messages[].parts[].text' "$h/opencode-import.json";;
+      goose) jq -r '.message.content | if type == "string" then . else .[].text end' "$h/goose-import.jsonl";;
+      muse) jq -r '.payload.event | .prompt // .text // empty' "$h"/.local/share/muse/sessions/*/*/*/"$(arg 2 <<< "$2")"/session.jsonl;;
+    esac
+  }
+  resume_args() {
+    case $1 in
+      claude|qwen|gemini) echo "--resume";; codex) echo "resume";; pi) echo "--session";; cline) echo "-i";;
+      opencode) echo "--session";; goose) echo "session";; muse) echo "resume";;
+    esac
+  }
+  for target in $targets; do
+    HANDOFF_HOME=$(handoff_home "$target")
+    handed=$(handoff_output "$target" aaaa "$target")
     check "handoff to $target starts in source project" yes "$(contains "$proj"$'\n'"$target" "$handed")"
-    check "handoff to $target supplies context before a model runs" yes "$(contains $'line one\nline two\tindent' "$handed")"
-    check "handoff to $target sends a continuation prompt" yes "$(contains 'arg=Continue this conversation from where it left off.' "$handed")"
-    check "handoff to $target keeps source id" yes "$(contains 'Session: aaaa1111-0000-0000-0000-000000000000' "$handed")"
-    snapshot=$(sed -n 's/^lsa: saved context: //p' "$tmp/handoff-error")
-    check "handoff to $target writes a private snapshot" 600 "$(stat -f %Lp "$snapshot" 2>/dev/null || stat -c %a "$snapshot")"
+    if [ "$target" = openclaw ]; then
+      # no openclaw database here, so it gets the conversation as its first message
+      check "handoff to openclaw falls back to a first message" yes "$(contains $'line one\nline two\tindent' "$handed")"
+      check "handoff says when it falls back" yes "$(contains 'sending the conversation as the first message' "$(cat "$tmp/handoff-error")")"
+      continue
+    fi
+    check "handoff to $target resumes the new session" "$(resume_args "$target")" "$(arg 1 <<< "$handed")"
+    text=$(native_text "$target" "$handed")
+    check "handoff to $target writes its own session with tool evidence" yes "$(contains $'line one\nline two\tindent' "$text")"
+    check "handoff to $target keeps the first prompt" yes "$(contains 'fix the "login" bug' "$text")"
+    check "handoff to $target names the source session" yes "$(contains 'claude session aaaa1111-0000-0000-0000-000000000000' "$text")"
   done
-  check "handoff forwards destination options" yes "$(contains $'arg=--model\narg=test-model' "$(handoff_output aaaa codex --model test-model)")"
-  for target in codex pi; do
-    check "handoff to $target preserves stdin" yes "$(contains 'stdin=follow-up' "$(printf 'follow-up\n' | LSA_TEST_READ_STDIN=1 handoff_output aaaa "$target")")"
+  HANDOFF_HOME=$(handoff_home claude)
+  check "handoff to claude alternates user and assistant" yes \
+    "$(jq -rs '[.[].type] | . as $t | all(range(1; length); $t[.] != $t[. - 1])' "$tmp"/.claude/projects/*/"$(arg 2 <<< "$(handoff_output claude aaaa claude)")".jsonl | sed 's/true/yes/')"
+  HANDOFF_HOME=$(handoff_home gemini)
+  handoff_output gemini aaaa gemini >/dev/null
+  gemini_file=$(ls "$HANDOFF_HOME"/.gemini/tmp/*/chats/session-*.jsonl)
+  check "gemini session file avoids the id suffix gemini's cleanup deletes" no \
+    "$(contains "-$(head -n 1 "$gemini_file" | jq -r '.sessionId[0:8]').jsonl" "$gemini_file")"
+  find "$tmp/.claude/projects" -name '*.jsonl' ! -name 'aaaa1111-*' ! -name 'agent-*' -newer "$tmp/.claude/projects/x/agent-sidechain.jsonl" -delete
+
+  HANDOFF_HOME=$(handoff_home pi)
+  mkdir -p "$HANDOFF_HOME/.pi/agent/sessions/x"
+  printf '{"type":"session","version":99}\n' > "$HANDOFF_HOME/.pi/agent/sessions/x/newer.jsonl"
+  handed=$(handoff_output pi aaaa pi)
+  check "handoff falls back when an agent's format has changed" yes "$(contains 'unrecognised Pi session format' "$(cat "$tmp/handoff-error")")"
+  check "the fallback sends the conversation to pi" yes "$(contains 'arg=@' "$handed")"
+
+  HANDOFF_HOME=$(handoff_home codex)
+  check "handoff forwards destination options" yes "$(contains $'arg=--model\narg=test-model' "$(handoff_output codex aaaa codex --model test-model)")"
+  for target in claude codex pi; do
+    HANDOFF_HOME=$(handoff_home "$target")
+    check "handoff to $target preserves stdin" yes "$(contains 'stdin=follow-up' "$(printf 'follow-up\n' | LSA_TEST_READ_STDIN=1 handoff_output "$target" aaaa "$target")")"
   done
-  check "failed Codex import stops handoff" 1 "$(LSA_TEST_CODEX_ERROR=1 handoff_output aaaa codex >"$tmp/failed-import"; echo $?)"
-  check "failed Codex import never opens an interactive session" '' "$(cat "$tmp/failed-import")"
+  find "$tmp/.claude/projects" -name '*.jsonl' ! -name 'aaaa1111-*' ! -name 'agent-*' -newer "$tmp/.claude/projects/x/agent-sidechain.jsonl" -delete
+  HANDOFF_HOME=$(handoff_home codex)
   touch "$tmp/.claude/projects/x/aaaa1111-0000-0000-0000-000000000000.jsonl"
-  check "handoff resolves index before launching destination" yes "$(contains 'Session: aaaa1111-0000-0000-0000-000000000000' "$(handoff_output 0 codex)")"
-  check "handoff rejects unknown session" 1 "$(handoff_output zzzz codex >/dev/null; echo $?)"
-  check "handoff rejects unsupported destination" 2 "$(handoff_output aaaa unknown >/dev/null; echo $?)"
+  check "handoff resolves index before launching destination" yes "$(contains 'claude session aaaa1111' "$(native_text codex "$(handoff_output codex 0 codex)")")"
+  check "handoff rejects unknown session" 1 "$(handoff_output codex zzzz codex >/dev/null; echo $?)"
+  check "handoff rejects unsupported destination" 2 "$(handoff_output codex aaaa unknown >/dev/null; echo $?)"
   check "handoff requires destination" 2 "$(bash "$LSA" handoff aaaa >/dev/null 2>&1; echo $?)"
-  check "handoff does not invent a missing project" 1 "$(rmdir "$tmp/elsewhere"; handoff_output cccc codex >/dev/null; echo $?)"
-  mkdir -p "$tmp/elsewhere"
 
   # full transcripts must survive OS argv limits
   awk 'BEGIN { printf "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\""; for (i=0;i<300000;i++) printf "x"; print "LARGE_TRANSCRIPT_END\"}}" }' >> "$tmp/.claude/projects/x/aaaa1111-0000-0000-0000-000000000000.jsonl"
-  for target in claude codex pi; do
-    handed=$(handoff_output aaaa "$target")
-    check "handoff to $target handles transcripts above argv limits" yes "$(contains LARGE_TRANSCRIPT_END "$handed")"
+  for target in codex pi; do
+    HANDOFF_HOME=$(handoff_home "$target")
+    check "handoff to $target handles transcripts above argv limits" yes "$(contains LARGE_TRANSCRIPT_END "$(native_text "$target" "$(handoff_output "$target" aaaa "$target")")")"
   done
 
   printf '{broken json\n' >> "$tmp/.claude/projects/x/aaaa1111-0000-0000-0000-000000000000.jsonl"
-  check "handoff never launches with an unreadable transcript" 1 "$(handoff_output aaaa codex >"$tmp/failed-handoff"; echo $?)"
+  HANDOFF_HOME=$(handoff_home codex)
+  check "handoff never launches with an unreadable transcript" 1 "$(handoff_output codex aaaa codex >"$tmp/failed-handoff"; echo $?)"
   check "failed handoff produced no agent output" '' "$(cat "$tmp/failed-handoff")"
+  check "failed handoff wrote no session" '' "$(ls "$HANDOFF_HOME/.codex" 2>/dev/null)"
 fi
 
 exit $fail

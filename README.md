@@ -156,7 +156,7 @@ lsa show 659c > transcript.txt
 
 ### Switch agents
 
-Continue a session in Claude, Codex or Pi:
+Continue a session in another agent:
 
 ```sh
 lsa handoff 0 codex
@@ -164,8 +164,11 @@ lsa handoff 659c claude
 lsa handoff 659c pi
 ```
 
-`handoff` starts the new agent in the same project directory with the saved
-conversation and tool results. The agent must be installed and signed in.
+`handoff` rewrites the conversation in the new agent's own session format and
+resumes it there, as if that agent had recorded it. The history shows and the
+agent waits for your next message. Tool calls and results come across as text.
+If an agent's session format has changed, `handoff` starts it with the
+conversation as its first message instead.
 
 You can also pipe a session from any supported agent into another agent's
 non-interactive mode. Run these from the session's project directory:
@@ -175,9 +178,7 @@ lsa show 659c | claude -p "Continue this conversation from where it left off."
 lsa show 659c | pi -p "Continue this conversation from where it left off."
 ```
 
-These examples run non-interactively. `handoff` loads the transcript into
-the new agent's context and opens an interactive session so you can keep
-chatting.
+These examples run non-interactively; use `handoff` to keep chatting.
 
 ## Where it looks
 
@@ -202,8 +203,8 @@ A session's directory and first prompt never change, so they are cached in
 `~/.cache/lsa/` after the first run. Listing is then one directory scan,
 one `stat` and one `awk`, about the cost of `ls -l` on the same files.
 Delete the index cache if you ever want a rescan. Listing and showing sessions
-only read local data. `handoff` also saves a local snapshot and launches the
-destination agent.
+only read local data. `handoff` also writes a new session into the destination
+agent's store and launches it.
 
 ## Adding an agent
 

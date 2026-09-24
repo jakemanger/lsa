@@ -7,15 +7,23 @@ PATH="$(dirname "$LSA"):$PATH"
 export PATH
 : "${DEMO_HOME:?}"
 # Only fixture readers and Goose use the demo home. The handoff launches a
-# real Claude with its normal login and read-only tools for the saved context.
-export DEMO_REAL_HOME=$HOME DEMO_CLAUDE
+# real Claude with its normal login and no tools.
+export DEMO_HOME DEMO_REAL_HOME=$HOME DEMO_CLAUDE
 DEMO_CLAUDE=$(command -v claude)
 mkdir -p "$DEMO_HOME/bin"
 cat > "$DEMO_HOME/bin/claude" <<'SH'
 #!/usr/bin/env bash
+# lsa wrote the handed-off session into the demo home; claude reads the real one
+if [ "${1:-}" = --resume ]; then
+  for f in "$DEMO_HOME"/.claude/projects/*/"$2".jsonl; do
+    [ -f "$f" ] || continue
+    d="$DEMO_REAL_HOME/.claude/projects/$(basename "$(dirname "$f")")"
+    mkdir -p "$d" && mv "$f" "$d/"
+  done
+fi
 export HOME=$DEMO_REAL_HOME
 unset XDG_CACHE_HOME
-exec "$DEMO_CLAUDE" --setting-sources "" --strict-mcp-config --tools Read --allowedTools Read --model sonnet --effort low --permission-mode manual "$@"
+exec "$DEMO_CLAUDE" --setting-sources "" --strict-mcp-config --tools "" --model sonnet --effort low --permission-mode manual "$@"
 SH
 chmod +x "$DEMO_HOME/bin/claude"
 PATH="$DEMO_HOME/bin:$PATH"

@@ -1,6 +1,6 @@
 #!/usr/bin/expect -f
-# a real interactive handoff with the transcript loaded at startup
-# play.sh configures Claude with only its Read tool and the normal login.
+# a real interactive handoff: Claude resumes the Goose conversation as its own
+# play.sh runs Claude with no tools and the normal login.
 set timeout 120
 encoding system utf-8
 set trust_sent 0
@@ -22,11 +22,10 @@ expect_before {
     eof { puts stderr "demo: Claude exited before the handoff finished"; exit 1 }
 }
 
-# Wait for the actual answer and idle title before sending a second turn.
-expect -re {⏺}
+# Claude opens idle with the conversation loaded; type the next message.
 expect -re {\x1b\]0;✳}
 sleep 2
-foreach ch [split "Shorter, please." ""] { send -- $ch; sleep 0.04 }
+foreach ch [split "Make the release notes one sentence." ""] { send -- $ch; sleep 0.04 }
 sleep 0.4
 send "\033\[13u"
 expect -re {⏺}
