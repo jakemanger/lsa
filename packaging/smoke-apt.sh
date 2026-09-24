@@ -13,5 +13,5 @@ docker run --rm -v "$repo:/repo:ro" ubuntu:24.04 bash -euc '
   lsa --version
   lsa --help >/dev/null
   apt-get remove -y lsa
-  ! command -v lsa
+  test ! -e /usr/bin/lsa
 '
