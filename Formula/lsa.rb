@@ -2,9 +2,9 @@
 class Lsa < Formula
   desc "ls for agent sessions"
   homepage "https://github.com/jakemanger/lsa"
-  url "https://github.com/jakemanger/lsa/releases/download/v0.1.1/lsa"
-  version "0.1.1"
-  sha256 "72b93a4838ae3360873ae3cd2b5a1016823f89a1ba6fb640c0e3a71695a90b8c"
+  url "https://github.com/jakemanger/lsa/releases/download/v0.1.2/lsa"
+  version "0.1.2"
+  sha256 "bc80bcac25a15f463bc080b4be818757274d3467c63ef819e872a36aa9ac97b5"
   license "MIT"
 
   depends_on "jq"
@@ -22,7 +22,7 @@ class Lsa < Formula
   end
 
   test do
-    assert_equal "lsa 0.1.1", shell_output("#{bin}/lsa --version").strip
+    assert_equal "lsa 0.1.2", shell_output("#{bin}/lsa --version").strip
     assert_match "ls for agent sessions", shell_output("#{bin}/lsa --help")
   end
 end
