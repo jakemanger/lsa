@@ -23,7 +23,7 @@ if [ "${1:-}" = --resume ]; then
   done
 fi
 HOME=$DEMO_REAL_HOME XDG_CACHE_HOME='' "$DEMO_CLAUDE" --setting-sources "" --strict-mcp-config --tools "" \
-  --model sonnet --effort low --permission-mode manual "$@"
+  --model sonnet --effort low --permission-mode manual --prompt-suggestions false "$@"
 status=$?
 [ -z "$demo" ] || mv "$real" "$demo"
 exit $status
@@ -67,16 +67,30 @@ run() { # type a command, run it, then prompt
   sleep "${2:-2.2}"
 }
 interactive() { # type a command whose program an expect script drives, then prompt
-  type_out "$1"; sleep 0.6; printf '\n'
+  type_out "$1"; sleep "${DEMO_COMMAND_PAUSE:-0.6}"; printf '\n'
   shift
   expect "$@"
   printf '%b' "$PS"
-  sleep 1.5
+  sleep "${DEMO_AFTER_AGENT_PAUSE:-1.5}"
 }
 
 clear
 printf '%b' "$PS"
 case ${1:-list} in
+  claude-codex)
+    DEMO_COMMAND_PAUSE=0.2 DEMO_AFTER_AGENT_PAUSE=0.15
+    # Show all three keystrokes, then execute the actual command.
+    sleep 0.12
+    for ch in l s a; do printf '%s' "$ch"; sleep 0.1; done
+    sleep 0.12
+    printf '\n'
+    lsa
+    printf '%b' "$PS"
+    sleep 0.65
+    interactive "lsa resume 0" -f "$(dirname "$LSA")/demo/social.exp" claude
+    interactive "lsa handoff 0 codex" -f "$(dirname "$LSA")/demo/social.exp" codex
+    exit 0
+    ;;
   list)
     say "ls, but for your agent sessions"
     run "lsa"

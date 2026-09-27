@@ -5,7 +5,12 @@
 # JuliaMono covers Claude's UI symbols. Install it or put its fonts in .tools/demo-fonts.
 #   demo/record.sh            -> demo/list.gif and demo/pick.gif
 #   demo/record.sh pick       -> just one scene
+#   demo/record.sh claude-codex [output-dir] -> short social clip (no Goose)
 set -eu
+if [ "${1:-}" = claude-codex ]; then
+  shift
+  exec bash "$(dirname "$0")/record-social.sh" "$@"
+fi
 unset NO_COLOR
 # record as a fresh terminal would, even when launched from inside an agent
 while read -r var; do unset "$var"; done < <(compgen -e | grep -E '^(CLAUDE|CODEX_|PI_|GEMINI_|QWEN_)' || :)

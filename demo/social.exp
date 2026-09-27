@@ -1,0 +1,86 @@
+#!/usr/bin/expect -f
+# Short, real Claude Code -> Codex interaction using the existing recorder.
+source [file join [file dirname [info script]] agent.tcl]
+encoding system utf-8
+if {[info exists env(DEMO_EXPECT_DEBUG)]} { exp_internal -f $env(DEMO_EXPECT_DEBUG) 0 }
+set which [lindex $argv 0]
+proc mark {label} {
+    set f [open $::env(DEMO_MARKERS) a]
+    puts $f "[clock milliseconds]\t$label"
+    close $f
+    puts -nonewline "\033\]777;lsa-demo:$label\007"
+    flush stdout
+}
+set trust_sent 0
+proc terminal_queries {} {
+global spawn_id
+expect_before {
+    # Match the dialog before trailing terminal queries consume its text.
+    -re {Enter.*confirm} {
+        if {!$::trust_sent} {
+            set ::trust_sent 1
+            pause 0.2
+            send "\033\[B"
+            pause 0.2
+            send "\033\[13u"
+        }
+        exp_continue
+    }
+    -re {Folder access} { pause 0.3; send "\r"; exp_continue }
+}
+# Queries can follow the very prompt we're waiting for in the same write.
+# Handle them AFTER the caller's pattern so they do not consume that prompt.
+expect_after {
+    -re {\x1b\[6n} { send "\033\[24;1R"; exp_continue }
+    -re {\x1b\]10;\?} { send "\033\]10;rgb:c9c9/d1d1/d9d9\033\\"; exp_continue }
+    -re {\x1b\]11;\?} { send "\033\]11;rgb:1717/1b1b/2121\033\\"; exp_continue }
+    -re {\x1b\[\?u} { send "\033\[?0u"; exp_continue }
+    -re {\x1b\[c} { send "\033\[?62;22c"; exp_continue }
+}
+}
+
+if {$which eq "claude"} {
+    mark claude.start
+    spawn -noecho bash -c {lsa resume 0}
+    terminal_queries
+    wait_for {shortcuts}
+    mark claude.ready
+    pause 0.4
+    type "Make it shorter."
+    pause 0.12
+    mark claude.submit
+    send "\033\[13u"
+    wait_for {⏺}
+    wait_for {\x1b\]0;✳}
+    mark claude.reply
+    pause 1
+    send "\003"
+    pause 0.2
+    send "\003"
+    expect -timeout 15 eof {} timeout { fail "Claude did not quit" }
+    mark claude.exit
+} elseif {$which eq "codex"} {
+    mark codex.start
+    spawn -noecho bash -c {lsa handoff 0 codex -c model_reasoning_effort="low" --sandbox read-only}
+    terminal_queries
+    wait_for {Make it shorter}
+    settle 1
+    mark codex.ready
+    pause 0.4
+    type "Now make it a tweet."
+    pause 0.12
+    mark codex.submit
+    send "\r"
+    wait_for {Working}
+    pause 1
+    settle 3
+    mark codex.reply
+    pause 1.5
+    type "/quit"
+    pause 0.12
+    send "\r"
+    expect -timeout 20 eof {} timeout { fail "Codex did not quit" }
+    mark codex.exit
+} else {
+    fail "expected claude or codex"
+}

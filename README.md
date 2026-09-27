@@ -5,7 +5,9 @@
 machine, newest first. Resume the conversation, watch it work in the
 background, print it or continue it in another agent.
 
-![lsa listing sessions](demo/list.gif)
+![Typing lsa, resuming Claude Code, and continuing the conversation in Codex](demo/claude-codex.gif)
+
+List your sessions, reopen Claude Code, then hand the conversation to Codex.
 
 Like `ls`, `lsa` on its own lists the sessions started in the current
 directory. `-a` lists them all. Listing takes about as long as `ls -l`.
@@ -131,7 +133,10 @@ lsa resume 0        the same by index, like tmux attach -t 0
 lsa handoff 0 codex continue the newest session in Codex
 ```
 
-![lsa picking a session](demo/pick.gif)
+The longer walkthrough shows sessions across projects, resuming a conversation,
+and handing it between agents:
+
+![lsa listing, resuming and handing off sessions](demo/list.gif)
 
 A session whose agent is still working on a turn shows a green `●` and how
 long that turn has been running in place of its age:
@@ -153,6 +158,8 @@ lsa show 659c | less
 lsa show 659c | grep -n 'TODO'
 lsa show 659c > transcript.txt
 ```
+
+![lsa inspecting a session, its transcript and its path](demo/pick.gif)
 
 ### Switch agents
 
