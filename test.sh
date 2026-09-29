@@ -565,6 +565,30 @@ SH
   check "handoff rejects unsupported destination" 2 "$(handoff_output codex aaaa unknown >/dev/null; echo $?)"
   check "handoff requires destination" 2 "$(bash "$LSA" handoff aaaa >/dev/null 2>&1; echo $?)"
 
+  # Renaming a project leaves its transcript and cached directory behind.
+  renamed="$tmp/renamed project with 'quotes'"
+  mv "$proj" "$renamed"
+  check "renamed project's session stays in the all-directory listing" yes "$(contains aaaa "$(bash "$LSA" -a)")"
+  check "renamed project's transcript remains readable" yes "$(contains 'fix the "login" bug' "$(bash "$LSA" show aaaa)")"
+  HANDOFF_HOME=$(handoff_home codex)
+  handed=$(cd "$renamed" && handoff_output codex 0 codex --model test-model) || handed=''
+  check "handoff from renamed project uses current directory" yes "$(contains "$renamed"$'\n'codex "$handed")"
+  check "handoff reports missing source directory" yes "$(contains "session directory no longer exists: $proj" "$(cat "$tmp/handoff-error")")"
+  check "handoff reports fallback directory" yes "$(contains "using current directory: $renamed" "$(cat "$tmp/handoff-error")")"
+  check "renamed project handoff preserves destination options" yes "$(contains $'arg=--model\narg=test-model' "$handed")"
+  if [ -n "$handed" ]; then
+    check "renamed project handoff preserves the conversation" yes "$(contains 'fix the "login" bug' "$(native_text codex "$handed")")"
+    check "renamed project handoff records the new directory" "$(cd "$renamed" && pwd -P)" \
+      "$(jq -r 'select(.type == "session_meta") | .payload.cwd' "$HANDOFF_HOME"/.codex/sessions/*/*/*/rollout-*-"$(arg 2 <<< "$handed")".jsonl)"
+  fi
+  check "handoff leaves source transcript's directory unchanged" "$proj" \
+    "$(jq -r 'select(.type == "user") | .cwd // empty' "$tmp/.claude/projects/x/aaaa1111-0000-0000-0000-000000000000.jsonl")"
+  HANDOFF_HOME=$(handoff_home openclaw)
+  handed=$(cd "$renamed" && handoff_output openclaw aaaa openclaw) || handed=''
+  check "renamed project also works with first-message fallback" yes "$(contains "$renamed"$'\n'openclaw "$handed")"
+  check "renamed project fallback preserves the conversation" yes "$(contains 'fix the "login" bug' "$handed")"
+  mv "$renamed" "$proj"
+
   # full transcripts must survive OS argv limits
   awk 'BEGIN { printf "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\""; for (i=0;i<300000;i++) printf "x"; print "LARGE_TRANSCRIPT_END\"}}" }' >> "$tmp/.claude/projects/x/aaaa1111-0000-0000-0000-000000000000.jsonl"
   for target in codex pi; do

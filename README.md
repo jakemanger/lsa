@@ -177,6 +177,12 @@ agent waits for your next message. Tool calls and results come across as text.
 If an agent's session format has changed, `handoff` starts it with the
 conversation as its first message instead.
 
+Handoffs start in the session's recorded project directory. If that directory
+no longer exists (for example, after a rename), `handoff` prints a notice and
+uses your current directory. Run it from the renamed or moved project folder;
+the new session records that directory. The original transcript stays unchanged
+and remains available through `lsa -a` and `lsa show`.
+
 You can also pipe a session from any supported agent into another agent's
 non-interactive mode. Run these from the session's project directory:
 

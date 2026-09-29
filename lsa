@@ -3,7 +3,7 @@
 # https://github.com/jakemanger/lsa
 set -eu
 
-VERSION="0.1.2"
+VERSION="0.1.3"
 
 usage() {
   cat <<'EOF'
@@ -947,7 +947,10 @@ cmd_handoff() {
   hit=$(find_one "$source") || return
   IFS=$'\t' read -r agent id f cwd <<< "$hit"
   if [ "$agent" != openclaw ] && [ -n "$cwd" ] && [ "$cwd" != - ]; then
-    [ -d "$cwd" ] || { echo "lsa: session directory no longer exists: $cwd" >&2; return 1; }
+    if [ ! -d "$cwd" ]; then
+      printf 'lsa: session directory no longer exists: %s; using current directory: %s\n' "$cwd" "$PWD" >&2
+      cwd=$PWD
+    fi
   else cwd=$PWD; fi
   work=$(mktemp -d "${TMPDIR:-/tmp}/lsa-handoff.XXXXXX") || return
   { handoff_turns "$agent" "$id" "$f" "$cwd" > "$work/turns.json" &&
